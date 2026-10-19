@@ -153,6 +153,18 @@ details.tab-dados summary { cursor: pointer; color: var(--primary); font-size: .
 .qr { background: #fff; padding: .5rem; border-radius: 8px; width: 200px; height: 200px; }
 code.seg { font-size: .85rem; word-break: break-all; background: var(--surface-2); padding: .2rem .4rem; border-radius: 6px; }
 
+/* aviso global (quarta/quinta) */
+.aviso-global { background: var(--warn-soft); color: var(--warn); border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); padding: .55rem 1rem; text-align: center; font-size: .92rem; }
+.aviso-global a { color: inherit; font-weight: 700; margin-left: .4rem; }
+
+/* documento do lote de cancelamento */
+.documento .doc-cab { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; border-bottom: 2px solid var(--primary); padding-bottom: .6rem; margin-bottom: .8rem; flex-wrap: wrap; }
+.documento .doc-orgao { font-size: .8rem; text-transform: uppercase; letter-spacing: .5px; color: var(--ink-2); font-weight: 700; }
+.documento h1 { margin: .2rem 0 0; font-size: 1.25rem; }
+.documento .doc-num { text-align: right; font-size: .9rem; }
+.documento .assinatura { margin-top: 3rem; text-align: center; }
+details summary { cursor: pointer; }
+
 /* toast */
 .toast { position: fixed; right: 1rem; bottom: 1rem; z-index: 50; background: var(--ink); color: var(--bg); padding: .7rem 1rem;
   border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.25); max-width: 360px; font-size: .92rem; }
@@ -181,4 +193,7 @@ code.seg { font-size: .85rem; word-break: break-all; background: var(--surface-2
   .card, .kpi { break-inside: avoid; box-shadow: none; }
   .grafico { height: 240px; }
   body { font-size: 12px; }
+  .documento { border: 0; padding: 0; }
+  .documento .obs { max-width: none; }
+  input, select, textarea { border: 0; }
 }

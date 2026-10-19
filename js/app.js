@@ -116,6 +116,7 @@ async function aposLogin(session) {
   $('#topo').hidden = false;
   $('#nomeUsuario').textContent = `${perfil.nome} · ${({ funcionario: 'Funcionário', supervisor: 'Supervisão', admin: 'Administrador' })[perfil.papel]}`;
   $('#menuAdmin').hidden = !ehAdmin();
+  atualizarAvisoGlobal();
   resetInatividade();
   if (!location.hash || location.hash === '#/') location.hash = '#/lancar'; else rotear();
 }
@@ -254,7 +255,7 @@ function rotear() {
   const { rota, params } = parseHash();
   $$('#menu a').forEach(a => a.classList.toggle('ativo', a.dataset.rota === rota));
   destruirGraficos();
-  const telas = { lancar: telaLancar, pendentes: telaPendentes, relatorios: telaRelatorios, admin: telaAdmin, conta: telaConta };
+  const telas = { lancar: telaLancar, pendentes: telaPendentes, relatorios: telaRelatorios, cancelamentos: telaCancelamentos, admin: telaAdmin, conta: telaConta };
   (telas[rota] || telaLancar)(params);
   app().focus({ preventScroll: true });
 }
@@ -415,7 +416,7 @@ async function carregarDia(dia) {
     return `<tr><td>${i + 1}</td><td><strong>${esc(r.id_parcelamento)}</strong>${r.origem ? `<div class="dica">Origem ${esc(r.origem)}</div>` : ''}</td>
       <td>${esc(r.setor || '')}</td><td class="dica">${acoes.map(esc).join('<br>')}</td>
       <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) + (r.parcelas ? `<div class="dica">${r.parcelas} parc.</div>` : '') : ''}</td>
-      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div></td>
+      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagCanc(r)}</td>
       <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : ''}</td>
       <td class="obs">${esc(r.observacoes || '')}</td>
       <td><div class="acoes"><button class="btn peq" data-ed="${r.id}">Editar</button><button class="btn peq perigo" data-ex="${r.id}">Excluir</button></div></td></tr>`;
@@ -554,6 +555,12 @@ async function gerarRelatorio(f) {
     ${k('Ações', `${NUM.format(T.whatsapp + T.sms + T.ligacoes)}`, `WhatsApp ${NUM.format(T.whatsapp)} · SMS ${NUM.format(T.sms)} · Ligações ${NUM.format(T.ligacoes)}`)}
     ${k('Agendamentos', NUM.format(T.agendamentos))}
   </div>
+  <div class="kpis">
+    ${k('Cancelamento: aguardando envio', NUM.format(T.canc_aguardando || 0), 'na fila do próximo relatório de quinta')}
+    ${k('Encaminhados à Recuperação de Ativos', NUM.format(T.canc_enviados || 0))}
+    ${k('Cancelamentos confirmados', NUM.format(T.canc_cancelados || 0))}
+    ${k('Devolvidos (não cancelados)', NUM.format(T.canc_devolvidos || 0))}
+  </div>
   <div class="grade-2">
     <div class="card"><h3>Contatos, boletos e pagos ${porDia ? 'por dia' : 'por mês'}</h3>
       <div class="legenda"><span style="--cor:var(--s1)">Contatos</span><span style="--cor:var(--s2)">Boletos</span><span style="--cor:var(--s3)">Pagos</span></div>
@@ -628,7 +635,9 @@ function baixarCsv() {
   [['Contatos', T.contatos], ['Dias trabalhados', T.dias], ['WhatsApp', T.whatsapp], ['SMS', T.sms], ['Ligações', T.ligacoes], ['Agendamentos', T.agendamentos],
    ['Boletos gerados', T.boletos], ['Pagos', T.pagos], ['Em andamento', T.andamento], ['Revogados', T.revogados], ['Outros', T.outros], ['Sem situação', T.sem_situacao],
    ['Valor arrecadado', n(T.valor)], ['Parcelas pagas', T.parcelas], ['Conversão (%)', n((div0(T.pagos, T.contatos) * 100).toFixed(1))],
-   ['Efetividade boletos (%)', n((div0(T.pagos, T.boletos) * 100).toFixed(1))], ['Ticket médio', n(div0(T.valor, T.pagos).toFixed(2))]].forEach(x => L.push(x));
+   ['Efetividade boletos (%)', n((div0(T.pagos, T.boletos) * 100).toFixed(1))], ['Ticket médio', n(div0(T.valor, T.pagos).toFixed(2))],
+   ['Cancelamento: aguardando envio', T.canc_aguardando || 0], ['Encaminhados à Recuperação de Ativos', T.canc_enviados || 0],
+   ['Cancelamentos confirmados', T.canc_cancelados || 0], ['Devolvidos (não cancelados)', T.canc_devolvidos || 0]].forEach(x => L.push(x));
   L.push([], [porDia ? 'Dia' : 'Mês', 'Contatos', 'Boletos', 'Pagos', 'Valor']);
   serie.forEach(s => L.push([porDia ? fmtData(s.chave) : s.chave, s.contatos, s.boletos, s.pagos, n(s.valor)]));
   L.push([], ['Setor', 'Contatos', 'Pagos', 'Valor']); R.por_setor.forEach(s => L.push([s.setor, s.contatos, s.pagos, n(s.valor)]));
@@ -639,6 +648,169 @@ function baixarCsv() {
   a.download = `relatorio_cobrancas_${p.ini}_a_${p.fim}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// ---------------------------------------------------------------- CANCELAMENTOS
+const CANC_CLASSE = { 'Aguardando envio': 'Em-andamento', 'Retirado': 'Sem-situacao', 'Enviado': 'Outros', 'Cancelado': 'Revogado', 'Devolvido': 'Pago' };
+const tagCanc = r => r && r.cancelamento_status
+  ? `<div><span class="tag ${CANC_CLASSE[r.cancelamento_status] || 'Outros'}">Cancelamento: ${esc(r.cancelamento_status)}</span></div>` : '';
+const diaSemanaNum = iso => dt(iso).getUTCDay();          // 0 = domingo … 4 = quinta
+function proximaQuinta(iso = hoje()) { let d = iso; while (diaSemanaNum(d) !== 4) d = addDias(d, 1); return d; }
+
+async function atualizarAvisoGlobal() {
+  const box = $('#avisoGlobal'); if (!box) return;
+  box.hidden = true;
+  if (!ehSup()) return;
+  const dow = diaSemanaNum(hoje());
+  if (dow !== 3 && dow !== 4) return;                     // só quarta e quinta
+  const { count } = await sb.from('lancamentos').select('id', { count: 'exact', head: true }).eq('cancelamento_status', 'Aguardando envio');
+  if (!count) return;
+  box.innerHTML = `📋 ${dow === 4 ? 'Hoje é quinta-feira' : 'Amanhã é quinta-feira'}: há <strong>${count}</strong> caso(s) aguardando o relatório de cancelamento para a Recuperação de Ativos. <a href="#/cancelamentos">Abrir cancelamentos</a>`;
+  box.hidden = false;
+}
+
+async function telaCancelamentos(params) {
+  if (params.lote) return telaLote(params.lote);
+  const nomes = Object.fromEntries(S.perfis.map(p => [p.id, p.nome]));
+
+  if (!ehSup()) {
+    app().innerHTML = `<div class="cab"><div><h1>Cancelamentos</h1><p class="sub">Seus casos com a situação "Enviar para cancelamento" e o andamento junto à Recuperação de Ativos. O relatório semanal é gerado pela supervisão às quintas-feiras.</p></div></div>
+      <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Data do contato</th><th>Id parc.</th><th>Setor</th><th>Andamento</th><th>Lote</th><th>Retorno</th></tr></thead><tbody id="tbMeus"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody></table></div></div>`;
+    const [{ data, error }, { data: lotes }] = await Promise.all([
+      sb.from('lancamentos').select('*').eq('funcionario_id', S.user.id).not('cancelamento_status', 'is', null).order('data_contato', { ascending: false }).limit(500),
+      sb.from('lotes_cancelamento').select('id,numero,data_envio')
+    ]);
+    const tb = $('#tbMeus');
+    if (error) { tb.innerHTML = `<tr><td colspan="6" class="vazio">${esc(msgErro(error))}</td></tr>`; return; }
+    const L = Object.fromEntries((lotes || []).map(l => [l.id, l]));
+    tb.innerHTML = (data || []).map(r => `<tr><td>${fmtData(r.data_contato)}</td><td><strong>${esc(r.id_parcelamento)}</strong></td><td>${esc(r.setor || '')}</td>
+      <td>${tagCanc(r)}</td><td>${r.cancelamento_lote && L[r.cancelamento_lote] ? `${esc(L[r.cancelamento_lote].numero)} <span class="dica">${fmtData(L[r.cancelamento_lote].data_envio)}</span>` : ''}</td>
+      <td class="obs">${esc(r.cancelamento_obs || '')}</td></tr>`).join('') || '<tr><td colspan="6" class="vazio">Nenhum caso encaminhado para cancelamento.</td></tr>';
+    return;
+  }
+
+  const quinta = proximaQuinta();
+  app().innerHTML = `<div class="cab"><div><h1>Cancelamentos</h1><p class="sub">Casos com a situação "Enviar para cancelamento". Às quintas-feiras, um supervisor gera o relatório único da semana para a Recuperação de Ativos.</p></div>
+      <div class="dica">Próxima quinta-feira: <strong>${fmtData(quinta)}</strong></div></div>
+    <div class="card"><div class="cab"><h2>Aguardando envio</h2><span class="dica" id="qtdFila"></span></div>
+      <div class="tabela-wrap"><table><thead><tr><th><input type="checkbox" id="marcarTodos" checked aria-label="Marcar todos"></th><th>Data do contato</th><th>Id parc.</th><th>Origem</th><th>Setor</th><th>Funcionário</th><th>Observações</th><th></th></tr></thead>
+      <tbody id="tbFila"><tr><td colspan="8" class="vazio">Carregando…</td></tr></tbody></table></div>
+      <div class="linha" style="margin-top:.8rem">
+        <label class="campo" style="flex:1">Observação do relatório (opcional)<input id="obsLote" maxlength="500" placeholder="Ex.: casos sem possibilidade de renegociação – semana de 20 a 24/10"></label>
+        <button class="btn prim" id="btnGerar" disabled>Gerar relatório da semana</button>
+      </div>
+      <p class="dica">Ao gerar, os casos marcados recebem o número do lote e passam para "Enviado". Cada caso só pode ir em um lote.</p></div>
+    <div class="card"><details id="detRet"><summary><strong>Retirados da fila</strong> <span class="dica" id="qtdRet"></span></summary>
+      <div class="tabela-wrap"><table><thead><tr><th>Data do contato</th><th>Id parc.</th><th>Funcionário</th><th>Motivo da retirada</th><th></th></tr></thead><tbody id="tbRet"></tbody></table></div></details></div>
+    <div class="card"><h2>Relatórios enviados (lotes)</h2>
+      <div class="tabela-wrap"><table><thead><tr><th>Lote</th><th>Enviado em</th><th>Gerado por</th><th class="num">Casos</th><th class="num">Cancelados</th><th class="num">Devolvidos</th><th class="num">Sem retorno</th><th></th></tr></thead>
+      <tbody id="tbLotes"><tr><td colspan="8" class="vazio">Carregando…</td></tr></tbody></table></div></div>`;
+
+  const [fila, ret, lotes, env] = await Promise.all([
+    sb.from('lancamentos').select('*').eq('cancelamento_status', 'Aguardando envio').order('data_contato').order('id').limit(1000),
+    sb.from('lancamentos').select('*').eq('cancelamento_status', 'Retirado').order('data_contato', { ascending: false }).limit(200),
+    sb.from('lotes_cancelamento').select('*').order('id', { ascending: false }).limit(200),
+    sb.from('lancamentos').select('cancelamento_lote,cancelamento_status').not('cancelamento_lote', 'is', null).limit(10000)
+  ]);
+  const err = fila.error || ret.error || lotes.error || env.error;
+  if (err) { $('#tbFila').innerHTML = `<tr><td colspan="8" class="vazio">${esc(msgErro(err))}</td></tr>`; return; }
+
+  // fila
+  const F = fila.data || [];
+  $('#qtdFila').textContent = `${F.length} caso(s)`;
+  const btn = $('#btnGerar');
+  const atualizarBotao = () => { const n = $$('#tbFila input[data-id]:checked').length; btn.disabled = !n; btn.textContent = n ? `Gerar relatório da semana (${n} caso${n > 1 ? 's' : ''})` : 'Gerar relatório da semana'; };
+  $('#tbFila').innerHTML = F.map(r => `<tr><td><input type="checkbox" data-id="${r.id}" checked aria-label="Incluir no relatório"></td><td>${fmtData(r.data_contato)}</td>
+      <td><strong>${esc(r.id_parcelamento)}</strong></td><td>${esc(r.origem || '')}</td><td>${esc(r.setor || '')}</td><td>${esc(nomes[r.funcionario_id] || '—')}</td>
+      <td class="obs">${esc(r.observacoes || '')}</td><td><button class="btn peq" data-ret="${r.id}">Retirar da fila</button></td></tr>`).join('')
+    || '<tr><td colspan="8" class="vazio">Nenhum caso aguardando envio.</td></tr>';
+  $('#marcarTodos').addEventListener('change', e => { $$('#tbFila input[data-id]').forEach(c => (c.checked = e.target.checked)); atualizarBotao(); });
+  $$('#tbFila input[data-id]').forEach(c => c.addEventListener('change', atualizarBotao));
+  atualizarBotao();
+  $$('#tbFila [data-ret]').forEach(b => b.addEventListener('click', async () => {
+    const motivo = prompt('Motivo da retirada da fila (ex.: acordo fechado, situação revista):');
+    if (motivo === null) return;
+    const { error } = await sb.rpc('atualizar_cancelamento', { p_id: Number(b.dataset.ret), p_status: 'Retirado', p_obs: motivo });
+    if (error) return toast(msgErro(error), true);
+    toast('Caso retirado da fila.'); telaCancelamentos({}); atualizarAvisoGlobal();
+  }));
+  btn.addEventListener('click', async () => {
+    const ids = $$('#tbFila input[data-id]:checked').map(c => Number(c.dataset.id));
+    if (!ids.length) return;
+    if (!confirm(`Gerar o relatório com ${ids.length} caso(s)? Eles serão marcados como "Enviado" e não voltarão para a fila.`)) return;
+    btn.disabled = true;
+    const { data: loteId, error } = await sb.rpc('gerar_lote_cancelamento', { p_ids: ids, p_obs: $('#obsLote').value.trim() || null });
+    btn.disabled = false;
+    if (error) return toast(msgErro(error), true);
+    toast('Relatório gerado.'); atualizarAvisoGlobal();
+    location.hash = `#/cancelamentos?lote=${loteId}`;
+  });
+
+  // retirados
+  const R = ret.data || [];
+  $('#qtdRet').textContent = `(${R.length})`;
+  $('#tbRet').innerHTML = R.map(r => `<tr><td>${fmtData(r.data_contato)}</td><td><strong>${esc(r.id_parcelamento)}</strong></td><td>${esc(nomes[r.funcionario_id] || '—')}</td>
+      <td class="obs">${esc(r.cancelamento_obs || '')}</td><td><button class="btn peq" data-vol="${r.id}">Devolver à fila</button></td></tr>`).join('')
+    || '<tr><td colspan="5" class="vazio">Nenhum caso retirado.</td></tr>';
+  $$('#tbRet [data-vol]').forEach(b => b.addEventListener('click', async () => {
+    const { error } = await sb.rpc('atualizar_cancelamento', { p_id: Number(b.dataset.vol), p_status: 'Aguardando envio', p_obs: null });
+    if (error) return toast(msgErro(error), true);
+    toast('Caso devolvido à fila.'); telaCancelamentos({});
+  }));
+
+  // lotes
+  const cont = {};
+  for (const e of env.data || []) { const c = (cont[e.cancelamento_lote] ||= { Enviado: 0, Cancelado: 0, Devolvido: 0 }); c[e.cancelamento_status] = (c[e.cancelamento_status] || 0) + 1; }
+  $('#tbLotes').innerHTML = (lotes.data || []).map(l => { const c = cont[l.id] || { Enviado: 0, Cancelado: 0, Devolvido: 0 };
+    return `<tr><td><strong>${esc(l.numero)}</strong></td><td>${fmtData(l.data_envio)}</td><td>${esc(nomes[l.criado_por] || '—')}</td><td class="num">${l.quantidade}</td>
+      <td class="num">${c.Cancelado}</td><td class="num">${c.Devolvido}</td><td class="num">${c.Enviado}</td><td><a class="btn peq" href="#/cancelamentos?lote=${l.id}">Abrir</a></td></tr>`; }).join('')
+    || '<tr><td colspan="8" class="vazio">Nenhum relatório gerado ainda.</td></tr>';
+}
+
+async function telaLote(id) {
+  const nomes = Object.fromEntries(S.perfis.map(p => [p.id, p.nome]));
+  const [{ data: lote, error: e1 }, { data: itens, error: e2 }] = await Promise.all([
+    sb.from('lotes_cancelamento').select('*').eq('id', id).maybeSingle(),
+    sb.from('lancamentos').select('*').eq('cancelamento_lote', id).order('data_contato').order('id')
+  ]);
+  if (e1 || e2 || !lote) { app().innerHTML = `<div class="card aviso erro">${esc(e1 || e2 ? msgErro(e1 || e2) : 'Lote não encontrado.')}</div>`; return; }
+  const sup = ehSup();
+  const I = itens || [];
+  app().innerHTML = `
+  <div class="cab nao-imprimir"><div><a href="#/cancelamentos">← Voltar para Cancelamentos</a></div>
+    <div class="acoes"><button class="btn" id="btnImpLote">Imprimir / salvar PDF</button><button class="btn" id="btnCsvLote">Baixar planilha (CSV)</button></div></div>
+  <div class="card documento">
+    <div class="doc-cab">
+      <div><div class="doc-orgao">Setor de Cobrança</div><h1>Relatório de parcelamentos para cancelamento</h1></div>
+      <div class="doc-num">Lote <strong>${esc(lote.numero)}</strong><br>Enviado em ${fmtData(lote.data_envio)}</div>
+    </div>
+    <p><strong>Destino:</strong> Setor de Recuperação de Ativos</p>
+    <p>Encaminhamos os parcelamentos abaixo, para os quais não houve possibilidade de renegociação, para as providências de cancelamento.</p>
+    ${lote.observacao ? `<p><strong>Observação:</strong> ${esc(lote.observacao)}</p>` : ''}
+    <div class="tabela-wrap"><table><thead><tr><th>Nº</th><th>Id parcelamento</th><th>Origem / inscrição</th><th>Setor</th><th>Último contato</th><th>Responsável</th><th>Observações</th>${sup ? '<th class="nao-imprimir">Andamento</th>' : ''}</tr></thead>
+    <tbody>${I.map((r, i) => `<tr data-id="${r.id}"><td>${i + 1}</td><td><strong>${esc(r.id_parcelamento)}</strong></td><td>${esc(r.origem || '')}</td><td>${esc(r.setor || '')}</td>
+      <td>${fmtData(r.data_contato)}</td><td>${esc(nomes[r.funcionario_id] || '—')}</td><td class="obs">${esc(r.observacoes || '')}</td>
+      ${sup ? `<td class="nao-imprimir"><div class="form-col" style="gap:.3rem;min-width:190px"><select name="st">${['Enviado', 'Cancelado', 'Devolvido'].map(o => `<option ${o === r.cancelamento_status ? 'selected' : ''}>${o}</option>`).join('')}</select>
+        <input name="obs" maxlength="300" placeholder="Retorno (opcional)" value="${esc(r.cancelamento_obs || '')}"><button class="btn peq">Salvar</button></div></td>` : ''}</tr>`).join('')
+      || `<tr><td colspan="8" class="vazio">Nenhum caso visível neste lote.</td></tr>`}</tbody></table></div>
+    <p><strong>Total de parcelamentos: ${I.length}</strong></p>
+    <div class="assinatura"><div>________________________________________</div><div>${esc(nomes[lote.criado_por] || '')}</div><div class="dica">Responsável pelo envio</div></div>
+  </div>`;
+  $('#btnImpLote').addEventListener('click', () => window.print());
+  $('#btnCsvLote').addEventListener('click', () => {
+    const L = [['Lote', lote.numero], ['Enviado em', fmtData(lote.data_envio)], ['Destino', 'Setor de Recuperação de Ativos'], [],
+      ['Nº', 'Id parcelamento', 'Origem/inscrição', 'Setor', 'Último contato', 'Responsável', 'Observações', 'Andamento', 'Retorno']];
+    I.forEach((r, i) => L.push([i + 1, r.id_parcelamento, r.origem || '', r.setor || '', fmtData(r.data_contato), nomes[r.funcionario_id] || '', r.observacoes || '', r.cancelamento_status || '', r.cancelamento_obs || '']));
+    const csv = '﻿' + L.map(x => x.map(c => { c = String(c ?? ''); return /[;"\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c; }).join(';')).join('\r\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = `cancelamentos_lote_${lote.numero.replace('/', '-')}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+  if (sup) $$('.documento tr[data-id] button').forEach(b => b.addEventListener('click', async () => {
+    const tr = b.closest('tr');
+    const { error } = await sb.rpc('atualizar_cancelamento', { p_id: Number(tr.dataset.id), p_status: tr.querySelector('[name=st]').value, p_obs: tr.querySelector('[name=obs]').value.trim() || null });
+    if (error) return toast(msgErro(error), true);
+    toast('Andamento atualizado.');
+  }));
+}
+
 // ---------------------------------------------------------------- ADMINISTRAÇÃO
 async function telaAdmin() {
   if (!ehAdmin()) { location.hash = '#/lancar'; return; }
@@ -646,12 +818,14 @@ async function telaAdmin() {
   <div class="card"><h2>Usuários</h2><p class="dica">Novos cadastros aparecem aqui como "aguardando". Marque "Ativo" e escolha o papel. Para remover alguém, desmarque "Ativo".</p>
     <div class="tabela-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Ativo</th><th></th></tr></thead><tbody id="tbUsu"></tbody></table></div></div>
   <div class="card"><h2>Situações (resultado)</h2><p class="dica">A categoria define como a situação entra nos relatórios. Desative em vez de apagar, para manter o histórico.</p>
-    <div class="tabela-wrap"><table><thead><tr><th>Situação</th><th>Categoria</th><th>Quando usar</th><th class="num">Ordem</th><th>Ativa</th><th></th></tr></thead><tbody id="tbSit"></tbody></table></div>
+    <div class="tabela-wrap"><table><thead><tr><th>Situação</th><th>Categoria</th><th>Quando usar</th><th class="num">Ordem</th><th>Gera cancelamento</th><th>Ativa</th><th></th></tr></thead><tbody id="tbSit"></tbody></table></div>
     <form class="linha" id="fNovaSit" style="margin-top:.8rem">
       <label class="campo">Nova situação<input name="codigo" maxlength="60" required placeholder="EX.: REVOGADO – FALECIDO"></label>
       <label class="campo">Categoria<select name="categoria">${CATEGORIAS.slice(0, 4).map(c => `<option>${c}</option>`).join('')}</select></label>
       <label class="campo" style="flex:1">Quando usar<input name="descricao" maxlength="200"></label>
-      <button class="btn prim">Adicionar</button></form></div>
+      <label class="campo">Gera cancelamento<input type="checkbox" name="gera"></label>
+      <button class="btn prim">Adicionar</button></form>
+    <p class="dica">"Gera cancelamento": ao escolher a situação, o caso entra automaticamente na fila do relatório semanal à Recuperação de Ativos.</p></div>
   <div class="card"><h2>Setores</h2><div class="tabela-wrap"><table><thead><tr><th>Setor</th><th class="num">Ordem</th><th>Ativo</th><th></th></tr></thead><tbody id="tbSet"></tbody></table></div>
     <form class="linha" id="fNovoSet" style="margin-top:.8rem"><label class="campo">Novo setor<input name="nome" maxlength="40" required></label><button class="btn prim">Adicionar</button></form></div>
   <div class="card"><h2>Auditoria (últimas 200 alterações)</h2><div class="tabela-wrap"><table><thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Tabela</th><th>Registro</th><th>Campos alterados</th></tr></thead><tbody id="tbAud"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody></table></div></div>`;
@@ -660,7 +834,7 @@ async function telaAdmin() {
   const tbU = $('#tbUsu');
   const usus = [...S.perfis].sort((a, b) => (a.ativo - b.ativo) || a.nome.localeCompare(b.nome));
   tbU.innerHTML = usus.map(u => `<tr data-id="${u.id}"><td>${esc(u.nome)}${u.ativo ? '' : ' <span class="tag Em-andamento">aguardando</span>'}</td><td>${esc(u.email || '')}</td>
-    <td><select name="papel" ${u.id === S.user.id ? 'disabled' : ''}>${['funcionario', 'supervisor', 'admin'].map(p => `<option value="${p}" ${p === u.papel ? 'selected' : ''}>${({ funcionario: 'Funcionário', supervisor: 'Supervisão (só consulta)', admin: 'Administrador' })[p]}</option>`).join('')}</select></td>
+    <td><select name="papel" ${u.id === S.user.id ? 'disabled' : ''}>${['funcionario', 'supervisor', 'admin'].map(p => `<option value="${p}" ${p === u.papel ? 'selected' : ''}>${({ funcionario: 'Funcionário', supervisor: 'Supervisão (consulta + cancelamentos)', admin: 'Administrador' })[p]}</option>`).join('')}</select></td>
     <td><input type="checkbox" name="ativo" ${u.ativo ? 'checked' : ''} ${u.id === S.user.id ? 'disabled' : ''} aria-label="Ativo"></td>
     <td>${u.id === S.user.id ? '<span class="dica">você</span>' : '<button class="btn peq">Salvar</button>'}</td></tr>`).join('');
   $$('tr[data-id] button', tbU).forEach(b => b.addEventListener('click', async () => {
@@ -673,16 +847,17 @@ async function telaAdmin() {
   tbS.innerHTML = S.situacoes.map(s => `<tr data-cod="${esc(s.codigo)}"><td><strong>${esc(s.codigo)}</strong></td>
     <td><select name="categoria">${CATEGORIAS.slice(0, 4).map(c => `<option ${c === s.categoria ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
     <td><input name="descricao" value="${esc(s.descricao || '')}" maxlength="200"></td><td class="num"><input name="ordem" type="number" value="${s.ordem}" style="width:5rem"></td>
+    <td><input type="checkbox" name="gera" ${s.gera_cancelamento ? 'checked' : ''} aria-label="Gera cancelamento"></td>
     <td><input type="checkbox" name="ativo" ${s.ativo ? 'checked' : ''} aria-label="Ativa"></td><td><button class="btn peq">Salvar</button></td></tr>`).join('');
   $$('tr[data-cod] button', tbS).forEach(b => b.addEventListener('click', async () => {
     const tr = b.closest('tr');
     const { error } = await sb.from('situacoes').update({ categoria: tr.querySelector('[name=categoria]').value, descricao: tr.querySelector('[name=descricao]').value.trim() || null,
-      ordem: Number(tr.querySelector('[name=ordem]').value) || 100, ativo: tr.querySelector('[name=ativo]').checked }).eq('codigo', tr.dataset.cod);
+      ordem: Number(tr.querySelector('[name=ordem]').value) || 100, gera_cancelamento: tr.querySelector('[name=gera]').checked, ativo: tr.querySelector('[name=ativo]').checked }).eq('codigo', tr.dataset.cod);
     if (error) return toast(msgErro(error), true); toast('Situação atualizada.'); carregarTabelas();
   }));
   $('#fNovaSit').addEventListener('submit', async e => {
     e.preventDefault(); const f = e.target;
-    const { error } = await sb.from('situacoes').insert({ codigo: f.codigo.value.trim().toUpperCase().replace(/\s+-\s+/g, ' – '), categoria: f.categoria.value, descricao: f.descricao.value.trim() || null, ordem: 90 });
+    const { error } = await sb.from('situacoes').insert({ codigo: f.codigo.value.trim().toUpperCase().replace(/\s+-\s+/g, ' – '), categoria: f.categoria.value, descricao: f.descricao.value.trim() || null, ordem: 90, gera_cancelamento: f.gera.checked });
     if (error) return toast(msgErro(error), true); toast('Situação criada.'); telaAdmin();
   });
   // setores
