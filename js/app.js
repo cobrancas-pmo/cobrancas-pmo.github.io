@@ -135,6 +135,22 @@ async function carregarTabelas() {
 
 $('#btnSair').addEventListener('click', () => sb.auth.signOut());
 
+// ---------------------------------------------------------------- tema claro/escuro
+const TEMAS = [['auto', '◐', 'automático (segue o computador)'], ['light', '☀', 'claro'], ['dark', '☾', 'escuro']];
+function temaAtual() { const t = document.documentElement.getAttribute('data-theme'); return t === 'light' || t === 'dark' ? t : 'auto'; }
+function mostrarTema() {
+  const [, icone, nome] = TEMAS.find(x => x[0] === temaAtual());
+  const b = $('#btnTema'); b.textContent = icone; b.title = `Tema: ${nome} — clique para alternar`;
+}
+$('#btnTema').addEventListener('click', () => {
+  const i = TEMAS.findIndex(x => x[0] === temaAtual()); const prox = TEMAS[(i + 1) % TEMAS.length][0];
+  if (prox === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', prox);
+  try { if (prox === 'auto') localStorage.removeItem('tema'); else localStorage.setItem('tema', prox); } catch (e) {}
+  mostrarTema(); toast(`Tema ${TEMAS.find(x => x[0] === prox)[2]}.`);
+  if ($('#fRel')) gerarRelatorio($('#fRel')); else if (S.charts.length) rotear();   // redesenha os gráficos com as cores do tema
+});
+mostrarTema();
+
 // ---------------------------------------------------------------- telas de acesso
 function telaLogin(aba = 'entrar', aviso = '') {
   destruirGraficos();
