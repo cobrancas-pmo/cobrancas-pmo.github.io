@@ -71,13 +71,17 @@ create index auditoria_quando_idx on public.auditoria (quando);
 
 -- =====================================================================
 -- Funções auxiliares (security definer, com search_path vazio)
+-- Ficam no esquema "privado", que não é exposto pela API.
 -- =====================================================================
-create or replace function public.meu_papel() returns text
+create schema if not exists privado;
+revoke all on schema privado from public, anon;
+grant usage on schema privado to authenticated;
+create or replace function privado.meu_papel() returns text
 language sql stable security definer set search_path = '' as $$
   select p.papel from public.perfis p where p.id = auth.uid() and p.ativo
 $$;
 
-create or replace function public.sou_ativo() returns boolean
+create or replace function privado.sou_ativo() returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists(select 1 from public.perfis p where p.id = auth.uid() and p.ativo)
 $$;
@@ -138,7 +142,7 @@ create or replace function public.perfil_antes_atualizar() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
   -- auth.uid() nulo = painel/SQL do Supabase (dono do projeto); usuários do site sempre têm uid
-  if auth.uid() is not null and coalesce(public.meu_papel(), '') <> 'admin' then
+  if auth.uid() is not null and coalesce(privado.meu_papel(), '') <> 'admin' then
     if new.papel <> old.papel or new.ativo <> old.ativo or new.id <> old.id or new.email is distinct from old.email then
       raise exception 'Somente o administrador pode alterar papel ou acesso';
     end if;
@@ -167,37 +171,37 @@ grant select on public.auditoria to authenticated;
 
 -- perfis
 create policy perfis_ler on public.perfis for select to authenticated
-  using (id = (select auth.uid()) or (select public.meu_papel()) in ('supervisor','admin'));
+  using (id = (select auth.uid()) or (select privado.meu_papel()) in ('supervisor','admin'));
 create policy perfis_editar_proprio on public.perfis for update to authenticated
   using (id = (select auth.uid())) with check (id = (select auth.uid()));
 create policy perfis_admin on public.perfis for update to authenticated
-  using ((select public.meu_papel()) = 'admin') with check ((select public.meu_papel()) = 'admin');
+  using ((select privado.meu_papel()) = 'admin') with check ((select privado.meu_papel()) = 'admin');
 
 -- situacoes / setores: todos os ativos leem; só admin altera
-create policy situacoes_ler on public.situacoes for select to authenticated using ((select public.sou_ativo()));
-create policy situacoes_admin_ins on public.situacoes for insert to authenticated with check ((select public.meu_papel()) = 'admin');
+create policy situacoes_ler on public.situacoes for select to authenticated using ((select privado.sou_ativo()));
+create policy situacoes_admin_ins on public.situacoes for insert to authenticated with check ((select privado.meu_papel()) = 'admin');
 create policy situacoes_admin_upd on public.situacoes for update to authenticated
-  using ((select public.meu_papel()) = 'admin') with check ((select public.meu_papel()) = 'admin');
-create policy setores_ler on public.setores for select to authenticated using ((select public.sou_ativo()));
-create policy setores_admin_ins on public.setores for insert to authenticated with check ((select public.meu_papel()) = 'admin');
+  using ((select privado.meu_papel()) = 'admin') with check ((select privado.meu_papel()) = 'admin');
+create policy setores_ler on public.setores for select to authenticated using ((select privado.sou_ativo()));
+create policy setores_admin_ins on public.setores for insert to authenticated with check ((select privado.meu_papel()) = 'admin');
 create policy setores_admin_upd on public.setores for update to authenticated
-  using ((select public.meu_papel()) = 'admin') with check ((select public.meu_papel()) = 'admin');
+  using ((select privado.meu_papel()) = 'admin') with check ((select privado.meu_papel()) = 'admin');
 
 -- lancamentos: cada um os seus; supervisor/admin leem todos; admin corrige
 create policy lanc_ler on public.lancamentos for select to authenticated
-  using ((funcionario_id = (select auth.uid()) and (select public.sou_ativo()))
-         or (select public.meu_papel()) in ('supervisor','admin'));
+  using ((funcionario_id = (select auth.uid()) and (select privado.sou_ativo()))
+         or (select privado.meu_papel()) in ('supervisor','admin'));
 create policy lanc_inserir on public.lancamentos for insert to authenticated
-  with check (funcionario_id = (select auth.uid()) and (select public.sou_ativo()));
+  with check (funcionario_id = (select auth.uid()) and (select privado.sou_ativo()));
 create policy lanc_editar on public.lancamentos for update to authenticated
-  using ((funcionario_id = (select auth.uid()) and (select public.sou_ativo())) or (select public.meu_papel()) = 'admin')
-  with check ((funcionario_id = (select auth.uid()) and (select public.sou_ativo())) or (select public.meu_papel()) = 'admin');
+  using ((funcionario_id = (select auth.uid()) and (select privado.sou_ativo())) or (select privado.meu_papel()) = 'admin')
+  with check ((funcionario_id = (select auth.uid()) and (select privado.sou_ativo())) or (select privado.meu_papel()) = 'admin');
 create policy lanc_excluir on public.lancamentos for delete to authenticated
-  using ((funcionario_id = (select auth.uid()) and (select public.sou_ativo())) or (select public.meu_papel()) = 'admin');
+  using ((funcionario_id = (select auth.uid()) and (select privado.sou_ativo())) or (select privado.meu_papel()) = 'admin');
 
 -- auditoria: só admin lê; ninguém grava direto (só pelos gatilhos)
 create policy auditoria_ler on public.auditoria for select to authenticated
-  using ((select public.meu_papel()) = 'admin');
+  using ((select privado.meu_papel()) = 'admin');
 
 -- =====================================================================
 -- Relatório (respeita o RLS: security invoker)
@@ -267,9 +271,8 @@ select jsonb_build_object(
 $$;
 revoke all on function public.relatorio(date, date, uuid) from public, anon;
 grant execute on function public.relatorio(date, date, uuid) to authenticated;
-revoke all on function public.meu_papel() from public, anon;
-revoke all on function public.sou_ativo() from public, anon;
-grant execute on function public.meu_papel(), public.sou_ativo() to authenticated;
+revoke all on function privado.meu_papel(), privado.sou_ativo() from public, anon;
+grant execute on function privado.meu_papel(), privado.sou_ativo() to authenticated;
 revoke all on function public.novo_usuario() from public, anon, authenticated;
 revoke all on function public.registrar_auditoria() from public, anon, authenticated;
 revoke all on function public.perfil_antes_atualizar() from public, anon, authenticated;
