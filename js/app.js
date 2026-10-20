@@ -475,7 +475,7 @@ async function carregarDia(dia) {
   tb.innerHTML = rows.map((r, i) => {
     const acoes = [r.whatsapp && `WhatsApp: ${r.whatsapp}`, r.sms && `SMS: ${r.sms}`, r.ligacao && `Ligação: ${r.ligacao}`, r.agendamento && `Agend.: ${fmtData(r.agendamento)}`].filter(Boolean);
     return `<tr><td>${i + 1}</td><td><strong>${esc(r.id_parcelamento)}</strong>${r.origem ? `<div class="dica">Origem ${esc(r.origem)}</div>` : ''}</td>
-      <td>${esc(r.setor || '')}</td><td class="dica">${acoes.map(esc).join('<br>')}</td>
+      <td>${esc(r.setor || '')}</td><td class="dica">${acoes.map(esc).join('<br>')}${tagAgend(r)}</td>
       <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) + (r.parcelas ? `<div class="dica">${r.parcelas} parc.</div>` : '') : ''}${r.valor_boleto != null ? `<div class="dica">${BRL.format(r.valor_boleto)}</div>` : ''}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
       <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagCanc(r)}</td>
       <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : ''}${r.data_pagamento ? `<div class="dica">pago em ${fmtData(r.data_pagamento)}</div>` : ''}</td>
@@ -494,14 +494,14 @@ async function carregarDia(dia) {
 
 // ---------------------------------------------------------------- PENDENTES
 async function telaPendentes(params = {}) {
-  app().innerHTML = `<div class="cab"><div><h1>Pendentes</h1><p class="sub">Seus lançamentos ainda "em andamento" ou sem situação. Boletos vencidos aparecem primeiro: confira se foram pagos e atualize a situação.</p></div>
+  app().innerHTML = `<div class="cab"><div><h1>Pendentes</h1><p class="sub">Seus lançamentos ainda "em andamento" ou sem situação. Boletos vencidos e agendamentos cuja data já passou aparecem primeiro: confira e atualize a situação.</p></div>
     <div class="acoes"><label class="campo">Mostrar<select id="filtroPend">
-      <option value="todos">Todos os pendentes</option><option value="venc">Só boletos vencidos (conferir)</option>
+      <option value="todos">Todos os pendentes</option><option value="venc">Só boletos vencidos (conferir)</option><option value="agend">Só agendamentos vencidos (conferir comparecimento)</option>
       <option value="and">Só "Em andamento"</option><option value="sem">Só "Sem situação"</option></select></label></div></div>
     <div id="quadroEquipe"></div>
     <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Data do contato</th><th class="num">Dias</th><th>Id parc.</th><th>Setor</th><th>Situação</th><th>Agendamento</th><th>Boleto</th><th>Observações</th><th></th></tr></thead>
     <tbody id="tbPend"><tr><td colspan="9" class="vazio">Carregando…</td></tr></tbody></table></div>
-    <p class="dica">Os avisos de conferência aparecem ${PRAZO_UTEIS} dias úteis após o vencimento (prazo de compensação bancária). Feriados não são considerados.</p></div>`;
+    <p class="dica">Boletos: o aviso aparece ${PRAZO_UTEIS} dias úteis após o vencimento (prazo de compensação bancária; feriados não são considerados). Agendamentos: o aviso aparece no dia seguinte à data agendada, enquanto o caso continuar "em andamento". Se a pessoa não compareceu, use "SEM SUCESSO – NÃO COMPARECEU" (ou reagende, mudando a data).</p></div>`;
   if (params.filtro && [...$('#filtroPend').options].some(o => o.value === params.filtro)) $('#filtroPend').value = params.filtro;
   const codsAnd = S.situacoes.filter(s => s.categoria === 'Em andamento').map(s => `"${s.codigo.replace(/"/g, '')}"`);
   const { data, error } = await sb.from('lancamentos').select('*').eq('funcionario_id', S.user.id)
@@ -509,35 +509,41 @@ async function telaPendentes(params = {}) {
     .order('data_contato').order('id').limit(1000);
   const tb = $('#tbPend');
   if (error) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${esc(msgErro(error))}</td></tr>`; return; }
-  const ordem = { conferir: 0, compensacao: 1 };
-  const todas = (data || []).slice().sort((a, b) => (ordem[statusVenc(a)] ?? 2) - (ordem[statusVenc(b)] ?? 2)
-    || (statusVenc(a) === 'conferir' ? String(a.boleto_vencimento).localeCompare(b.boleto_vencimento) : 0));
+  const conferir = r => statusVenc(r) === 'conferir' || statusAgend(r) === 'conferir';
+  const pri = r => (conferir(r) ? 0 : (statusVenc(r) === 'compensacao' || statusAgend(r) === 'hoje') ? 1 : 2);
+  const dataRef = r => [statusVenc(r) === 'conferir' ? r.boleto_vencimento : null, statusAgend(r) === 'conferir' ? r.agendamento : null].filter(Boolean).sort()[0] || '9999';
+  const todas = (data || []).slice().sort((a, b) => pri(a) - pri(b) || (pri(a) === 0 ? dataRef(a).localeCompare(dataRef(b)) : 0));
   const desenhar = () => {
     const filtro = $('#filtroPend').value;
-    const rows = todas.filter(r => filtro === 'todos' || (filtro === 'venc' ? statusVenc(r) === 'conferir' : filtro === 'sem' ? !r.situacao : !!r.situacao));
-    if (!rows.length) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${filtro === 'venc' ? 'Nenhum boleto vencido para conferir. 👍' : 'Nenhuma pendência. 👍'}</td></tr>`; return; }
-    tb.innerHTML = rows.map(r => `<tr class="${statusVenc(r) === 'conferir' ? 'linha-alerta' : ''}"><td>${fmtData(r.data_contato)}</td><td class="num">${diasDesde(r.data_contato)}</td>
+    const rows = todas.filter(r => filtro === 'todos' || (filtro === 'venc' ? statusVenc(r) === 'conferir' : filtro === 'agend' ? statusAgend(r) === 'conferir' : filtro === 'sem' ? !r.situacao : !!r.situacao));
+    if (!rows.length) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${filtro === 'venc' ? 'Nenhum boleto vencido para conferir. 👍' : filtro === 'agend' ? 'Nenhum agendamento vencido para conferir. 👍' : 'Nenhuma pendência. 👍'}</td></tr>`; return; }
+    tb.innerHTML = rows.map(r => `<tr class="${conferir(r) ? 'linha-alerta' : ''}"><td>${fmtData(r.data_contato)}</td><td class="num">${diasDesde(r.data_contato)}</td>
       <td><strong>${esc(r.id_parcelamento)}</strong></td><td>${esc(r.setor || '')}</td>
-      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div></td><td>${fmtData(r.agendamento)}</td>
+      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div></td><td>${fmtData(r.agendamento)}${tagAgend(r)}</td>
       <td>${fmtData(r.boleto_emitido)}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
-      <td class="obs">${esc(r.observacoes || '')}</td><td><a class="btn peq ${statusVenc(r) === 'conferir' ? 'prim' : ''}" href="#/lancar?data=${r.data_contato}&editar=${r.id}">${statusVenc(r) === 'conferir' ? 'Conferir' : 'Atualizar'}</a></td></tr>`).join('');
+      <td class="obs">${esc(r.observacoes || '')}</td><td><a class="btn peq ${conferir(r) ? 'prim' : ''}" href="#/lancar?data=${r.data_contato}&editar=${r.id}">${conferir(r) ? 'Conferir' : 'Atualizar'}</a></td></tr>`).join('');
   };
   $('#filtroPend').addEventListener('change', desenhar); desenhar();
 
   // quadro da equipe (supervisão)
   if (ehSup()) {
-    const lista = await buscarBoletosAConferir(true);
+    const [bol, agd] = await Promise.all([buscarBoletosAConferir(true), buscarAgendamentosAConferir(true)]);
     const nomes = Object.fromEntries(S.perfis.map(p => [p.id, p.nome]));
-    const porFunc = {};
-    for (const r of lista) { const g = (porFunc[r.funcionario_id] ||= { qtd: 0, maisAntigo: r.boleto_vencimento }); g.qtd++; if (r.boleto_vencimento < g.maisAntigo) g.maisAntigo = r.boleto_vencimento; }
-    const linhas = Object.entries(porFunc).sort((a, b) => b[1].qtd - a[1].qtd);
-    $('#quadroEquipe').innerHTML = `<div class="card"><div class="cab"><h2>Boletos vencidos sem conferência — equipe</h2><span class="dica">${lista.length} no total</span></div>
-      ${linhas.length ? `<div class="tabela-wrap"><table><thead><tr><th>Funcionário</th><th class="num">Boletos a conferir</th><th>Vencimento mais antigo</th><th class="num">Dias desde o vencimento</th></tr></thead><tbody>
+    const quadro = (titulo, lista, campo, rotQtd, rotData, rotLista, vazio) => {
+      const porFunc = {};
+      for (const r of lista) { const g = (porFunc[r.funcionario_id] ||= { qtd: 0, maisAntigo: r[campo] }); g.qtd++; if (r[campo] < g.maisAntigo) g.maisAntigo = r[campo]; }
+      const linhas = Object.entries(porFunc).sort((a, b) => b[1].qtd - a[1].qtd);
+      return `<div class="card"><div class="cab"><h2>${titulo}</h2><span class="dica">${lista.length} no total</span></div>
+      ${linhas.length ? `<div class="tabela-wrap"><table><thead><tr><th>Funcionário</th><th class="num">${rotQtd}</th><th>${rotData} mais antigo</th><th class="num">Dias desde então</th></tr></thead><tbody>
       ${linhas.map(([id, g]) => `<tr class="${diasDesde(g.maisAntigo) > 10 ? 'linha-alerta' : ''}"><td>${esc(nomes[id] || '—')}</td><td class="num">${g.qtd}</td><td>${fmtData(g.maisAntigo)}</td><td class="num">${diasDesde(g.maisAntigo)}</td></tr>`).join('')}
       </tbody></table></div>
-      <details class="tab-dados"><summary>Ver todos os boletos vencidos da equipe</summary><div class="tabela-wrap"><table><thead><tr><th>Funcionário</th><th>Id parc.</th><th>Situação</th><th>Vencimento</th><th class="num">Dias</th></tr></thead><tbody>
-      ${lista.map(r => `<tr><td>${esc(nomes[r.funcionario_id] || '—')}</td><td><strong>${esc(r.id_parcelamento)}</strong></td><td class="dica">${esc(r.situacao)}</td><td>${fmtData(r.boleto_vencimento)}</td><td class="num">${diasDesde(r.boleto_vencimento)}</td></tr>`).join('')}
-      </tbody></table></div></details>` : '<p class="vazio">Nenhum boleto vencido aguardando conferência na equipe. 👍</p>'}</div>`;
+      <details class="tab-dados"><summary>${rotLista}</summary><div class="tabela-wrap"><table><thead><tr><th>Funcionário</th><th>Id parc.</th><th>Situação</th><th>${rotData}</th><th class="num">Dias</th></tr></thead><tbody>
+      ${lista.map(r => `<tr><td>${esc(nomes[r.funcionario_id] || '—')}</td><td><strong>${esc(r.id_parcelamento)}</strong></td><td class="dica">${esc(r.situacao || '(sem situação)')}</td><td>${fmtData(r[campo])}</td><td class="num">${diasDesde(r[campo])}</td></tr>`).join('')}
+      </tbody></table></div></details>` : `<p class="vazio">${vazio}</p>`}</div>`;
+    };
+    $('#quadroEquipe').innerHTML =
+      quadro('Boletos vencidos sem conferência — equipe', bol, 'boleto_vencimento', 'Boletos a conferir', 'Vencimento', 'Ver todos os boletos vencidos da equipe', 'Nenhum boleto vencido aguardando conferência na equipe. 👍') +
+      quadro('Agendamentos vencidos sem atualização — equipe', agd, 'agendamento', 'Agendamentos a conferir', 'Agendamento', 'Ver todos os agendamentos vencidos da equipe', 'Nenhum agendamento vencido aguardando atualização na equipe. 👍');
   }
 }
 
@@ -920,6 +926,32 @@ function tagVenc(r) {
   if (st === 'compensacao') return `<div><span class="tag Em-andamento">Vencido – aguardando compensação até ${fmtData(addDiasUteis(r.boleto_vencimento, PRAZO_UTEIS))}</span></div>`;
   return '';
 }
+// ---------------------------------------------------------------- agendamentos vencidos
+// Caso ainda "em andamento" (ou sem situação) com data de agendamento já passada: conferir se a pessoa compareceu.
+// Situações de boleto (Confere vencimento) ficam de fora: elas já têm o aviso próprio.
+const codsAgend = () => S.situacoes.filter(s => s.categoria === 'Em andamento' && !s.confere_vencimento).map(s => s.codigo);
+function statusAgend(r) {   // 'conferir' | 'hoje' | 'futuro' | null
+  if (!r || !r.agendamento) return null;
+  if (r.situacao && !codsAgend().includes(r.situacao)) return null;
+  const h = hoje();
+  return r.agendamento < h ? 'conferir' : r.agendamento === h ? 'hoje' : 'futuro';
+}
+function tagAgend(r) {
+  const st = statusAgend(r);
+  if (st === 'conferir') return `<div><span class="tag Revogado">⚠ Agendamento de ${fmtData(r.agendamento)} passou – conferir comparecimento</span></div>`;
+  if (st === 'hoje') return `<div><span class="tag Em-andamento">Agendado para hoje</span></div>`;
+  return '';
+}
+async function buscarAgendamentosAConferir(todos = false) {
+  const cods = codsAgend().map(c => `"${c.replace(/"/g, '')}"`);
+  let q = sb.from('lancamentos').select('*').not('agendamento', 'is', null).lt('agendamento', hoje())
+    .or(`situacao.is.null${cods.length ? `,situacao.in.(${cods.join(',')})` : ''}`).order('agendamento').limit(2000);
+  if (!todos) q = q.eq('funcionario_id', S.user.id);
+  const { data, error } = await q;
+  if (error) return [];
+  return (data || []).filter(r => statusAgend(r) === 'conferir');
+}
+
 // boletos a conferir do próprio usuário (ou de todos, para a supervisão)
 async function buscarBoletosAConferir(todos = false) {
   if (!S.situacoes.some(s => s.confere_vencimento)) return [];
@@ -935,10 +967,12 @@ async function atualizarAvisoGlobal() {
   const box = $('#avisoGlobal'); if (!box) return;
   const msgs = [];
   // boletos vencidos do próprio usuário
-  const meus = await buscarBoletosAConferir(false);
+  const [meus, agend] = await Promise.all([buscarBoletosAConferir(false), buscarAgendamentosAConferir(false)]);
   const link = document.querySelector('#menu a[data-rota="pendentes"]');
-  if (link) link.innerHTML = 'Pendentes' + (meus.length ? ` <span class="badge" title="Boletos vencidos para conferir">${meus.length}</span>` : '');
+  const nTot = meus.length + agend.length;
+  if (link) link.innerHTML = 'Pendentes' + (nTot ? ` <span class="badge" title="${meus.length} boleto(s) vencido(s) e ${agend.length} agendamento(s) vencido(s) para conferir">${nTot}</span>` : '');
   if (meus.length) msgs.push(`⚠ Você tem <strong>${meus.length}</strong> boleto(s) vencido(s) para conferir se foram pagos. <a href="#/pendentes?filtro=venc">Conferir agora</a>`);
+  if (agend.length) msgs.push(`📅 Você tem <strong>${agend.length}</strong> agendamento(s) cuja data já passou. Confira se a pessoa compareceu e atualize a situação. <a href="#/pendentes?filtro=agend">Conferir agora</a>`);
   // lembrete de quinta-feira (supervisão)
   if (ehSup()) {
     const dow = diaSemanaNum(hoje());
