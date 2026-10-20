@@ -230,3 +230,8 @@ tr.linha-alerta td { background: color-mix(in srgb, var(--bad-soft) 70%, transpa
   .funil-barra { grid-column: 1 / -1; grid-row: 2; }
 }
 @media print { .funil-barra span { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+
+/* administração */
+.check-linha { display: inline-flex; align-items: center; gap: .4rem; margin: .2rem 0 .6rem; font-size: .9rem; cursor: pointer; }
+.acoes-linha { white-space: nowrap; }
+.acoes-linha .btn + .btn { margin-left: .3rem; }

@@ -63,6 +63,7 @@ function msgErro(e) {
     [/lancamentos_id_parcelamento_check/i, 'Id do parcelamento inválido: use apenas números/letras, sem espaços (nada de nomes).'],
     [/lancamentos_origem_check/i, 'Origem/inscrição inválida: use apenas números/letras, sem espaços.'],
     [/lancamentos_meio_acordo_check/i, 'Meio que gerou o acordo inválido.'],
+    [/lancamentos_situacao_fkey/i, 'Esta situação já foi usada em lançamentos e não pode ser excluída. Desative-a.'],
     [/lancamentos_vencimento_apos_emissao/i, 'O vencimento não pode ser anterior à emissão do boleto.'],
     [/Failed to fetch|NetworkError/i, 'Sem conexão com o servidor. Verifique sua internet.'],
     [/Invalid TOTP|invalid.*code/i, 'Código inválido. Confira o horário do celular e tente novamente.']
@@ -1123,8 +1124,9 @@ async function telaAdmin() {
   app().innerHTML = `<div class="cab"><div><h1>Administração</h1><p class="sub">Liberação de acessos, padronização das listas e auditoria.</p></div></div>
   <div class="card"><h2>Usuários</h2><p class="dica">Novos cadastros aparecem aqui como "aguardando". Marque "Ativo" e escolha o papel. Para remover alguém, desmarque "Ativo".</p>
     <div class="tabela-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Ativo</th><th></th></tr></thead><tbody id="tbUsu"></tbody></table></div></div>
-  <div class="card"><h2>Situações (resultado)</h2><p class="dica">A categoria define como a situação entra nos relatórios. Desative em vez de apagar, para manter o histórico.</p>
-    <div class="tabela-wrap"><table><thead><tr><th>Situação</th><th>Categoria</th><th>Quando usar</th><th class="num">Ordem</th><th>Gera cancelamento</th><th>Confere vencimento</th><th>Ativa</th><th></th></tr></thead><tbody id="tbSit"></tbody></table></div>
+  <div class="card"><h2>Situações (resultado)</h2><p class="dica">A categoria define como a situação entra nos relatórios. <strong>Excluir</strong> só é possível para situações nunca usadas; as que já aparecem em lançamentos são <strong>desativadas</strong> (somem das listas, mas o histórico e os relatórios antigos continuam corretos).</p>
+    <label class="check-linha"><input type="checkbox" id="verInativas"> Mostrar situações desativadas <span class="dica" id="qtdInativas"></span></label>
+    <div class="tabela-wrap"><table><thead><tr><th>Situação</th><th>Categoria</th><th>Quando usar</th><th class="num">Ordem</th><th>Gera cancelamento</th><th>Confere vencimento</th><th>Ativa</th><th class="num">Em uso</th><th></th></tr></thead><tbody id="tbSit"></tbody></table></div>
     <form class="linha" id="fNovaSit" style="margin-top:.8rem">
       <label class="campo">Nova situação<input name="codigo" maxlength="60" required placeholder="EX.: SEM SUCESSO – FALECIDO"></label>
       <label class="campo">Categoria<select name="categoria">${CATEGORIAS.slice(0, 4).map(c => `<option value="${c}">${catNome(c)}</option>`).join('')}</select></label>
@@ -1151,18 +1153,48 @@ async function telaAdmin() {
   }));
   // situações
   const tbS = $('#tbSit');
-  tbS.innerHTML = S.situacoes.map(s => `<tr data-cod="${esc(s.codigo)}"><td><strong>${esc(s.codigo)}</strong></td>
+  const { data: usoRows } = await sb.rpc('uso_situacoes');
+  const uso = Object.fromEntries((usoRows || []).map(r => [r.codigo, Number(r.qtde)]));
+  let verInativas = false; try { verInativas = localStorage.getItem('adm_ver_inativas') === '1'; } catch (_) {}
+  $('#verInativas').checked = verInativas;
+  const desenharSit = () => {
+    const inativas = S.situacoes.filter(s => !s.ativo).length;
+    $('#qtdInativas').textContent = inativas ? `(${inativas})` : '(nenhuma)';
+    const lista = S.situacoes.filter(s => verInativas || s.ativo);
+    tbS.innerHTML = lista.map(s => { const n = uso[s.codigo] || 0; return `<tr data-cod="${esc(s.codigo)}" class="${s.ativo ? '' : 'zero'}"><td><strong>${esc(s.codigo)}</strong>${s.ativo ? '' : ' <span class="tag Sem-situacao">desativada</span>'}</td>
     <td><select name="categoria">${CATEGORIAS.slice(0, 4).map(c => `<option value="${c}" ${c === s.categoria ? 'selected' : ''}>${catNome(c)}</option>`).join('')}</select></td>
     <td><input name="descricao" value="${esc(s.descricao || '')}" maxlength="200"></td><td class="num"><input name="ordem" type="number" value="${s.ordem}" style="width:5rem"></td>
     <td><input type="checkbox" name="gera" ${s.gera_cancelamento ? 'checked' : ''} aria-label="Gera cancelamento"></td>
     <td><input type="checkbox" name="confv" ${s.confere_vencimento ? 'checked' : ''} aria-label="Confere vencimento"></td>
-    <td><input type="checkbox" name="ativo" ${s.ativo ? 'checked' : ''} aria-label="Ativa"></td><td><button class="btn peq">Salvar</button></td></tr>`).join('');
-  $$('tr[data-cod] button', tbS).forEach(b => b.addEventListener('click', async () => {
-    const tr = b.closest('tr');
-    const { error } = await sb.from('situacoes').update({ categoria: tr.querySelector('[name=categoria]').value, descricao: tr.querySelector('[name=descricao]').value.trim() || null,
-      ordem: Number(tr.querySelector('[name=ordem]').value) || 100, gera_cancelamento: tr.querySelector('[name=gera]').checked, confere_vencimento: tr.querySelector('[name=confv]').checked, ativo: tr.querySelector('[name=ativo]').checked }).eq('codigo', tr.dataset.cod);
-    if (error) return toast(msgErro(error), true); toast('Situação atualizada.'); carregarTabelas();
-  }));
+    <td><input type="checkbox" name="ativo" ${s.ativo ? 'checked' : ''} aria-label="Ativa"></td>
+    <td class="num" title="Lançamentos com esta situação">${NUM.format(n)}</td>
+    <td class="acoes-linha"><button class="btn peq" data-acao="salvar">Salvar</button>${n && !s.ativo ? '' : `<button class="btn peq perigo" data-acao="excluir" title="${n ? 'Em uso: será oferecida a desativação' : 'Excluir definitivamente'}">${n ? 'Desativar' : 'Excluir'}</button>`}</td></tr>`; }).join('')
+      || '<tr><td colspan="9" class="vazio">Nenhuma situação ativa.</td></tr>';
+    $$('tr[data-cod] button[data-acao=salvar]', tbS).forEach(b => b.addEventListener('click', async () => {
+      const tr = b.closest('tr');
+      const { error } = await sb.from('situacoes').update({ categoria: tr.querySelector('[name=categoria]').value, descricao: tr.querySelector('[name=descricao]').value.trim() || null,
+        ordem: Number(tr.querySelector('[name=ordem]').value) || 100, gera_cancelamento: tr.querySelector('[name=gera]').checked, confere_vencimento: tr.querySelector('[name=confv]').checked, ativo: tr.querySelector('[name=ativo]').checked }).eq('codigo', tr.dataset.cod);
+      if (error) return toast(msgErro(error), true); toast('Situação atualizada.'); await carregarTabelas(); desenharSit();
+    }));
+    $$('tr[data-cod] button[data-acao=excluir]', tbS).forEach(b => b.addEventListener('click', async () => {
+      const cod = b.closest('tr').dataset.cod; const n = uso[cod] || 0;
+      const sit = S.situacoes.find(x => x.codigo === cod) || {};
+      const alerta = [sit.gera_cancelamento ? '• Ela alimenta a fila de cancelamentos para a Recuperação de Ativos.' : '', sit.confere_vencimento ? '• Ela faz o sistema avisar sobre boletos vencidos.' : '']
+        .filter(Boolean); const extra = alerta.length ? `\n\nAtenção:\n${alerta.join('\n')}` : '';
+      if (n) {
+        if (!confirm(`A situação "${cod}" está em ${n} lançamento(s) e não pode ser excluída sem apagar o histórico.\n\nDesativá-la? Ela deixa de aparecer nas listas, mas os lançamentos e relatórios antigos continuam corretos.${extra}`)) return;
+        const { error } = await sb.from('situacoes').update({ ativo: false }).eq('codigo', cod);
+        if (error) return toast(msgErro(error), true); toast('Situação desativada.');
+      } else {
+        if (!confirm(`Excluir definitivamente a situação "${cod}"?\n\nEla nunca foi usada em lançamentos. A exclusão fica registrada na auditoria.${extra}`)) return;
+        const { error } = await sb.from('situacoes').delete().eq('codigo', cod);
+        if (error) return toast(msgErro(error), true); toast('Situação excluída.');
+      }
+      await carregarTabelas(); desenharSit();
+    }));
+  };
+  $('#verInativas').addEventListener('change', e => { verInativas = e.target.checked; try { localStorage.setItem('adm_ver_inativas', verInativas ? '1' : '0'); } catch (_) {} desenharSit(); });
+  desenharSit();
   $('#fNovaSit').addEventListener('submit', async e => {
     e.preventDefault(); const f = e.target;
     const { error } = await sb.from('situacoes').insert({ codigo: f.codigo.value.trim().toUpperCase().replace(/\s+-\s+/g, ' – '), categoria: f.categoria.value, descricao: f.descricao.value.trim() || null, ordem: 90, gera_cancelamento: f.gera.checked, confere_vencimento: f.confv.checked });
