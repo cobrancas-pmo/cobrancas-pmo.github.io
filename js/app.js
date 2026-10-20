@@ -320,9 +320,12 @@ async function telaLancar(params) {
       <label class="campo">SMS<select name="sms">${optList(OPC.sms)}</select></label>
       <label class="campo">Ligação<select name="ligacao">${optList(OPC.ligacao)}</select></label>
       <label class="campo">Agendamento (data)<input type="date" name="agendamento"></label>
+    </div></fieldset>
+    <fieldset><legend>Boletos</legend><div class="grade">
       <label class="campo">Boleto emitido em<input type="date" name="boleto_emitido"></label>
       <label class="campo">Data de vencimento<input type="date" name="boleto_vencimento"></label>
       <label class="campo">Nº de parcelas<input type="number" name="parcelas" min="1" max="240" step="1"></label>
+      <label class="campo">Valor do boleto (R$)<input name="valor_boleto" inputmode="decimal" placeholder="0,00"></label>
     </div></fieldset>
     <fieldset><legend>Resultado</legend><div class="grade">
       <label class="campo largo">Situação<select name="situacao">${optSituacoes()}</select><span class="dica" id="descSit"></span></label>
@@ -351,10 +354,13 @@ async function telaLancar(params) {
   $('#btnLimpar').addEventListener('click', limpar);
   f.situacao.addEventListener('change', () => {
     $('#descSit').textContent = S.situacoes.find(s => s.codigo === f.situacao.value)?.descricao || '';
-    if (catDe(f.situacao.value) === 'Pago') { if (!f.data_pagamento.value) f.data_pagamento.value = hoje(); } else f.data_pagamento.value = '';
+    if (catDe(f.situacao.value) === 'Pago') {
+      if (!f.data_pagamento.value) f.data_pagamento.value = hoje();
+      if (!f.valor_pago.value && f.valor_boleto.value) f.valor_pago.value = f.valor_boleto.value;   // sugere o valor do boleto
+    } else f.data_pagamento.value = '';
   });
   f.id_parcelamento.addEventListener('blur', () => verificarDuplicado(f));
-  f.valor_pago.addEventListener('blur', () => { const v = parseValor(f.valor_pago.value); if (v != null && !Number.isNaN(v)) f.valor_pago.value = fmtValorInput(v); });
+  for (const nm of ['valor_pago', 'valor_boleto']) f[nm].addEventListener('blur', () => { const v = parseValor(f[nm].value); if (v != null && !Number.isNaN(v)) f[nm].value = fmtValorInput(v); });
 
   f.addEventListener('submit', async e => {
     e.preventDefault();
@@ -362,13 +368,15 @@ async function telaLancar(params) {
       id_parcelamento: f.id_parcelamento.value.trim(), setor: f.setor.value || null, origem: f.origem.value.trim() || null,
       fonte_contato: f.fonte_contato.value || null, whatsapp: f.whatsapp.value || null, sms: f.sms.value || null,
       ligacao: f.ligacao.value || null, agendamento: f.agendamento.value || null, boleto_emitido: f.boleto_emitido.value || null, boleto_vencimento: f.boleto_vencimento.value || null,
-      parcelas: f.parcelas.value ? Number(f.parcelas.value) : null, situacao: f.situacao.value || null,
+      parcelas: f.parcelas.value ? Number(f.parcelas.value) : null, valor_boleto: parseValor(f.valor_boleto.value), situacao: f.situacao.value || null,
       valor_pago: parseValor(f.valor_pago.value), data_pagamento: f.data_pagamento.value || null, observacoes: f.observacoes.value.trim() || null
     };
     if (!RE_ID.test(o.id_parcelamento)) { f.id_parcelamento.setAttribute('aria-invalid', 'true'); f.id_parcelamento.focus(); return toast('Informe o Id do parcelamento (só números/letras, sem espaços).', true); }
     f.id_parcelamento.removeAttribute('aria-invalid');
     if (o.origem && !RE_ID.test(o.origem)) return toast('Origem/inscrição: use só números/letras, sem espaços.', true);
     if (Number.isNaN(o.valor_pago)) return toast('Valor pago inválido. Exemplo: 388,15', true);
+    if (Number.isNaN(o.valor_boleto)) return toast('Valor do boleto inválido. Exemplo: 388,15', true);
+    if (o.valor_boleto != null && !o.boleto_emitido && !confirm('Há valor do boleto, mas sem a data de emissão. Salvar mesmo assim?')) return;
     if (o.boleto_vencimento && o.boleto_emitido && o.boleto_vencimento < o.boleto_emitido) return toast('O vencimento não pode ser anterior à emissão do boleto.', true);
     if (o.boleto_emitido && !o.boleto_vencimento && sitConfere(o.situacao) && !confirm('Boleto sem data de vencimento: o sistema não poderá avisar quando conferir o pagamento. Salvar mesmo assim?')) return;
     if (o.parcelas != null && !(Number.isInteger(o.parcelas) && o.parcelas >= 1 && o.parcelas <= 240)) return toast('Nº de parcelas deve ser um número inteiro de 1 a 240.', true);
@@ -410,6 +418,7 @@ function editar(l) {
   f.situacao.innerHTML = optSituacoes(l.situacao); f.situacao.value = l.situacao ?? '';
   $('#descSit').textContent = S.situacoes.find(s => s.codigo === l.situacao)?.descricao || '';
   f.valor_pago.value = fmtValorInput(l.valor_pago);
+  f.valor_boleto.value = fmtValorInput(l.valor_boleto);
   f.data_pagamento.value = l.data_pagamento || '';
   $('#tituloForm').textContent = `Editando lançamento – Id ${l.id_parcelamento}`;
   $('#btnSalvar').textContent = 'Salvar alterações';
@@ -448,7 +457,7 @@ async function carregarDia(dia) {
     const acoes = [r.whatsapp && `WhatsApp: ${r.whatsapp}`, r.sms && `SMS: ${r.sms}`, r.ligacao && `Ligação: ${r.ligacao}`, r.agendamento && `Agend.: ${fmtData(r.agendamento)}`].filter(Boolean);
     return `<tr><td>${i + 1}</td><td><strong>${esc(r.id_parcelamento)}</strong>${r.origem ? `<div class="dica">Origem ${esc(r.origem)}</div>` : ''}</td>
       <td>${esc(r.setor || '')}</td><td class="dica">${acoes.map(esc).join('<br>')}</td>
-      <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) + (r.parcelas ? `<div class="dica">${r.parcelas} parc.</div>` : '') : ''}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
+      <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) + (r.parcelas ? `<div class="dica">${r.parcelas} parc.</div>` : '') : ''}${r.valor_boleto != null ? `<div class="dica">${BRL.format(r.valor_boleto)}</div>` : ''}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
       <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagCanc(r)}</td>
       <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : ''}${r.data_pagamento ? `<div class="dica">pago em ${fmtData(r.data_pagamento)}</div>` : ''}</td>
       <td class="obs">${esc(r.observacoes || '')}</td>
@@ -599,7 +608,7 @@ async function gerarRelatorio(f) {
     ${alertas.map(a => `<div class="aviso atencao">${esc(a)}</div>`).join('')}</div>
   <div class="kpis">
     ${k('Contatos realizados', NUM.format(T.contatos), `${NUM.format(T.dias)} dia(s) trabalhado(s)`, 'destaque')}
-    ${k('Boletos gerados', NUM.format(T.boletos))}
+    ${k('Boletos gerados', NUM.format(T.boletos), T.valor_boletos ? `${BRL.format(T.valor_boletos)} em boletos` : '')}
     ${k('Pagamentos no período', NUM.format(T.pagos), `pela data do pagamento · ${NUM.format(T.parcelas)} parcela(s)`)}
     ${k('Em andamento', NUM.format(T.andamento))}
     ${k('Sem sucesso', NUM.format(T.revogados))}
@@ -691,7 +700,7 @@ function baixarCsv() {
   L.push(['Relatório de cobranças', p.rotulo], ['Funcionário', nomeFunc], ['Período', `${fmtData(p.ini)} a ${fmtData(p.fim)}`], []);
   L.push(['Indicador', 'Valor']);
   [['Contatos', T.contatos], ['Dias trabalhados', T.dias], ['WhatsApp', T.whatsapp], ['SMS', T.sms], ['Ligações', T.ligacoes], ['Agendamentos', T.agendamentos],
-   ['Boletos gerados', T.boletos], ['Contatos do período já pagos', T.pagos_contatos || 0], ['Pagamentos no período (data do pagamento)', T.pagos], ['Em andamento', T.andamento], ['Sem sucesso', T.revogados], ['Outros', T.outros], ['Sem situação', T.sem_situacao],
+   ['Boletos gerados', T.boletos], ['Valor dos boletos gerados', n(T.valor_boletos || 0)], ['Contatos do período já pagos', T.pagos_contatos || 0], ['Pagamentos no período (data do pagamento)', T.pagos], ['Em andamento', T.andamento], ['Sem sucesso', T.revogados], ['Outros', T.outros], ['Sem situação', T.sem_situacao],
    ['Valor arrecadado (data do pagamento)', n(T.valor)], ['Parcelas pagas', T.parcelas], ['Conversão dos contatos (%)', n((div0(T.pagos_contatos, T.contatos) * 100).toFixed(1))],
    ['Efetividade boletos (%)', n((div0(T.pagos_contatos, T.boletos) * 100).toFixed(1))], ['Ticket médio', n(div0(T.valor, T.pagos).toFixed(2))],
    ['Cancelamento: aguardando envio', T.canc_aguardando || 0], ['Encaminhados à Recuperação de Ativos', T.canc_enviados || 0],
