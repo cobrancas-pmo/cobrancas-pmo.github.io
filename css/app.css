@@ -178,6 +178,11 @@ code.seg { font-size: .85rem; word-break: break-all; background: var(--surface-2
 .documento .assinatura { margin-top: 3rem; text-align: center; }
 details summary { cursor: pointer; }
 
+/* alertas de vencimento */
+tr.linha-alerta td { background: color-mix(in srgb, var(--bad-soft) 70%, transparent); }
+.badge { display: inline-block; min-width: 1.3rem; padding: 0 .35rem; border-radius: 999px; background: #d03b3b; color: #fff; font-size: .72rem; font-weight: 800; line-height: 1.3rem; text-align: center; margin-left: .25rem; }
+.aviso-global div + div { margin-top: .3rem; }
+
 /* toast */
 .toast { position: fixed; right: 1rem; bottom: 1rem; z-index: 50; background: var(--ink); color: var(--bg); padding: .7rem 1rem;
   border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.25); max-width: 360px; font-size: .92rem; }

@@ -58,6 +58,7 @@ function msgErro(e) {
     [/row-level security|permission denied/i, 'Você não tem permissão para esta ação.'],
     [/lancamentos_id_parcelamento_check/i, 'Id do parcelamento inválido: use apenas números/letras, sem espaços (nada de nomes).'],
     [/lancamentos_origem_check/i, 'Origem/inscrição inválida: use apenas números/letras, sem espaços.'],
+    [/lancamentos_vencimento_apos_emissao/i, 'O vencimento não pode ser anterior à emissão do boleto.'],
     [/Failed to fetch|NetworkError/i, 'Sem conexão com o servidor. Verifique sua internet.'],
     [/Invalid TOTP|invalid.*code/i, 'Código inválido. Confira o horário do celular e tente novamente.']
   ];
@@ -317,6 +318,7 @@ async function telaLancar(params) {
       <label class="campo">Ligação<select name="ligacao">${optList(OPC.ligacao)}</select></label>
       <label class="campo">Agendamento (data)<input type="date" name="agendamento"></label>
       <label class="campo">Boleto emitido em<input type="date" name="boleto_emitido"></label>
+      <label class="campo">Vencimento do boleto<input type="date" name="boleto_vencimento"></label>
       <label class="campo">Nº de parcelas<input type="number" name="parcelas" min="1" max="240" step="1"></label>
     </div></fieldset>
     <fieldset><legend>Resultado</legend><div class="grade">
@@ -352,7 +354,7 @@ async function telaLancar(params) {
     const o = {
       id_parcelamento: f.id_parcelamento.value.trim(), setor: f.setor.value || null, origem: f.origem.value.trim() || null,
       fonte_contato: f.fonte_contato.value || null, whatsapp: f.whatsapp.value || null, sms: f.sms.value || null,
-      ligacao: f.ligacao.value || null, agendamento: f.agendamento.value || null, boleto_emitido: f.boleto_emitido.value || null,
+      ligacao: f.ligacao.value || null, agendamento: f.agendamento.value || null, boleto_emitido: f.boleto_emitido.value || null, boleto_vencimento: f.boleto_vencimento.value || null,
       parcelas: f.parcelas.value ? Number(f.parcelas.value) : null, situacao: f.situacao.value || null,
       valor_pago: parseValor(f.valor_pago.value), observacoes: f.observacoes.value.trim() || null
     };
@@ -360,6 +362,8 @@ async function telaLancar(params) {
     f.id_parcelamento.removeAttribute('aria-invalid');
     if (o.origem && !RE_ID.test(o.origem)) return toast('Origem/inscrição: use só números/letras, sem espaços.', true);
     if (Number.isNaN(o.valor_pago)) return toast('Valor pago inválido. Exemplo: 388,15', true);
+    if (o.boleto_vencimento && o.boleto_emitido && o.boleto_vencimento < o.boleto_emitido) return toast('O vencimento não pode ser anterior à emissão do boleto.', true);
+    if (o.boleto_emitido && !o.boleto_vencimento && sitConfere(o.situacao) && !confirm('Boleto sem data de vencimento: o sistema não poderá avisar quando conferir o pagamento. Salvar mesmo assim?')) return;
     if (o.parcelas != null && !(Number.isInteger(o.parcelas) && o.parcelas >= 1 && o.parcelas <= 240)) return toast('Nº de parcelas deve ser um número inteiro de 1 a 240.', true);
     const cat = catDe(o.situacao);
     if (cat === 'Pago' && o.valor_pago == null && !confirm('Situação "pago" sem valor informado. Salvar mesmo assim?')) return;
@@ -372,7 +376,7 @@ async function telaLancar(params) {
                  : await sb.from('lancamentos').insert({ ...o, data_contato: dia });
     b.disabled = false;
     if (r.error) return toast(msgErro(r.error), true);
-    toast(id ? 'Lançamento atualizado.' : 'Lançamento salvo.');
+    toast(id ? 'Lançamento atualizado.' : 'Lançamento salvo.'); atualizarAvisoGlobal();
     limpar(); await carregarDia(dia); f.id_parcelamento.focus();
   });
 
@@ -386,7 +390,7 @@ async function telaLancar(params) {
 function editar(l) {
   const f = $('#fLanc'); if (!f) return;
   f.registro.value = l.id;
-  for (const k of ['id_parcelamento', 'origem', 'agendamento', 'boleto_emitido', 'parcelas', 'observacoes']) f[k].value = l[k] ?? '';
+  for (const k of ['id_parcelamento', 'origem', 'agendamento', 'boleto_emitido', 'boleto_vencimento', 'parcelas', 'observacoes']) f[k].value = l[k] ?? '';
   for (const k of ['setor', 'fonte_contato', 'whatsapp', 'sms', 'ligacao']) {
     if (l[k] && ![...f[k].options].some(o => o.value === l[k])) f[k].insertAdjacentHTML('beforeend', `<option>${esc(l[k])}</option>`);
     f[k].value = l[k] ?? '';
@@ -431,7 +435,7 @@ async function carregarDia(dia) {
     const acoes = [r.whatsapp && `WhatsApp: ${r.whatsapp}`, r.sms && `SMS: ${r.sms}`, r.ligacao && `Ligação: ${r.ligacao}`, r.agendamento && `Agend.: ${fmtData(r.agendamento)}`].filter(Boolean);
     return `<tr><td>${i + 1}</td><td><strong>${esc(r.id_parcelamento)}</strong>${r.origem ? `<div class="dica">Origem ${esc(r.origem)}</div>` : ''}</td>
       <td>${esc(r.setor || '')}</td><td class="dica">${acoes.map(esc).join('<br>')}</td>
-      <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) + (r.parcelas ? `<div class="dica">${r.parcelas} parc.</div>` : '') : ''}</td>
+      <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) + (r.parcelas ? `<div class="dica">${r.parcelas} parc.</div>` : '') : ''}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
       <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagCanc(r)}</td>
       <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : ''}</td>
       <td class="obs">${esc(r.observacoes || '')}</td>
@@ -448,28 +452,52 @@ async function carregarDia(dia) {
 }
 
 // ---------------------------------------------------------------- PENDENTES
-async function telaPendentes() {
-  app().innerHTML = `<div class="cab"><div><h1>Pendentes</h1><p class="sub">Seus lançamentos ainda "em andamento" ou sem situação. Atualize-os à medida que houver retorno.</p></div>
-    <div class="acoes"><label class="campo">Mostrar<select id="filtroPend"><option value="todos">Todos os pendentes</option><option value="and">Só "Em andamento"</option><option value="sem">Só "Sem situação"</option></select></label></div></div>
+async function telaPendentes(params = {}) {
+  app().innerHTML = `<div class="cab"><div><h1>Pendentes</h1><p class="sub">Seus lançamentos ainda "em andamento" ou sem situação. Boletos vencidos aparecem primeiro: confira se foram pagos e atualize a situação.</p></div>
+    <div class="acoes"><label class="campo">Mostrar<select id="filtroPend">
+      <option value="todos">Todos os pendentes</option><option value="venc">Só boletos vencidos (conferir)</option>
+      <option value="and">Só "Em andamento"</option><option value="sem">Só "Sem situação"</option></select></label></div></div>
+    <div id="quadroEquipe"></div>
     <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Data do contato</th><th class="num">Dias</th><th>Id parc.</th><th>Setor</th><th>Situação</th><th>Agendamento</th><th>Boleto</th><th>Observações</th><th></th></tr></thead>
-    <tbody id="tbPend"><tr><td colspan="9" class="vazio">Carregando…</td></tr></tbody></table></div></div>`;
+    <tbody id="tbPend"><tr><td colspan="9" class="vazio">Carregando…</td></tr></tbody></table></div>
+    <p class="dica">Os avisos de conferência aparecem ${PRAZO_UTEIS} dias úteis após o vencimento (prazo de compensação bancária). Feriados não são considerados.</p></div>`;
+  if (params.filtro && [...$('#filtroPend').options].some(o => o.value === params.filtro)) $('#filtroPend').value = params.filtro;
   const codsAnd = S.situacoes.filter(s => s.categoria === 'Em andamento').map(s => `"${s.codigo.replace(/"/g, '')}"`);
   const { data, error } = await sb.from('lancamentos').select('*').eq('funcionario_id', S.user.id)
     .or(`situacao.is.null${codsAnd.length ? `,situacao.in.(${codsAnd.join(',')})` : ''}`)
     .order('data_contato').order('id').limit(1000);
   const tb = $('#tbPend');
   if (error) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${esc(msgErro(error))}</td></tr>`; return; }
+  const ordem = { conferir: 0, compensacao: 1 };
+  const todas = (data || []).slice().sort((a, b) => (ordem[statusVenc(a)] ?? 2) - (ordem[statusVenc(b)] ?? 2)
+    || (statusVenc(a) === 'conferir' ? String(a.boleto_vencimento).localeCompare(b.boleto_vencimento) : 0));
   const desenhar = () => {
     const filtro = $('#filtroPend').value;
-    const rows = (data || []).filter(r => filtro === 'todos' || (filtro === 'sem' ? !r.situacao : !!r.situacao));
-    if (!rows.length) { tb.innerHTML = '<tr><td colspan="9" class="vazio">Nenhuma pendência. 👍</td></tr>'; return; }
-    const h = dt(hoje());
-    tb.innerHTML = rows.map(r => `<tr><td>${fmtData(r.data_contato)}</td><td class="num">${Math.round((h - dt(r.data_contato)) / 864e5)}</td>
+    const rows = todas.filter(r => filtro === 'todos' || (filtro === 'venc' ? statusVenc(r) === 'conferir' : filtro === 'sem' ? !r.situacao : !!r.situacao));
+    if (!rows.length) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${filtro === 'venc' ? 'Nenhum boleto vencido para conferir. 👍' : 'Nenhuma pendência. 👍'}</td></tr>`; return; }
+    tb.innerHTML = rows.map(r => `<tr class="${statusVenc(r) === 'conferir' ? 'linha-alerta' : ''}"><td>${fmtData(r.data_contato)}</td><td class="num">${diasDesde(r.data_contato)}</td>
       <td><strong>${esc(r.id_parcelamento)}</strong></td><td>${esc(r.setor || '')}</td>
-      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div></td><td>${fmtData(r.agendamento)}</td><td>${fmtData(r.boleto_emitido)}</td>
-      <td class="obs">${esc(r.observacoes || '')}</td><td><a class="btn peq" href="#/lancar?data=${r.data_contato}&editar=${r.id}">Atualizar</a></td></tr>`).join('');
+      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div></td><td>${fmtData(r.agendamento)}</td>
+      <td>${fmtData(r.boleto_emitido)}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
+      <td class="obs">${esc(r.observacoes || '')}</td><td><a class="btn peq ${statusVenc(r) === 'conferir' ? 'prim' : ''}" href="#/lancar?data=${r.data_contato}&editar=${r.id}">${statusVenc(r) === 'conferir' ? 'Conferir' : 'Atualizar'}</a></td></tr>`).join('');
   };
   $('#filtroPend').addEventListener('change', desenhar); desenhar();
+
+  // quadro da equipe (supervisão)
+  if (ehSup()) {
+    const lista = await buscarBoletosAConferir(true);
+    const nomes = Object.fromEntries(S.perfis.map(p => [p.id, p.nome]));
+    const porFunc = {};
+    for (const r of lista) { const g = (porFunc[r.funcionario_id] ||= { qtd: 0, maisAntigo: r.boleto_vencimento }); g.qtd++; if (r.boleto_vencimento < g.maisAntigo) g.maisAntigo = r.boleto_vencimento; }
+    const linhas = Object.entries(porFunc).sort((a, b) => b[1].qtd - a[1].qtd);
+    $('#quadroEquipe').innerHTML = `<div class="card"><div class="cab"><h2>Boletos vencidos sem conferência — equipe</h2><span class="dica">${lista.length} no total</span></div>
+      ${linhas.length ? `<div class="tabela-wrap"><table><thead><tr><th>Funcionário</th><th class="num">Boletos a conferir</th><th>Vencimento mais antigo</th><th class="num">Dias desde o vencimento</th></tr></thead><tbody>
+      ${linhas.map(([id, g]) => `<tr class="${diasDesde(g.maisAntigo) > 10 ? 'linha-alerta' : ''}"><td>${esc(nomes[id] || '—')}</td><td class="num">${g.qtd}</td><td>${fmtData(g.maisAntigo)}</td><td class="num">${diasDesde(g.maisAntigo)}</td></tr>`).join('')}
+      </tbody></table></div>
+      <details class="tab-dados"><summary>Ver todos os boletos vencidos da equipe</summary><div class="tabela-wrap"><table><thead><tr><th>Funcionário</th><th>Id parc.</th><th>Situação</th><th>Vencimento</th><th class="num">Dias</th></tr></thead><tbody>
+      ${lista.map(r => `<tr><td>${esc(nomes[r.funcionario_id] || '—')}</td><td><strong>${esc(r.id_parcelamento)}</strong></td><td class="dica">${esc(r.situacao)}</td><td>${fmtData(r.boleto_vencimento)}</td><td class="num">${diasDesde(r.boleto_vencimento)}</td></tr>`).join('')}
+      </tbody></table></div></details>` : '<p class="vazio">Nenhum boleto vencido aguardando conferência na equipe. 👍</p>'}</div>`;
+  }
 }
 
 // ---------------------------------------------------------------- RELATÓRIOS
@@ -671,16 +699,57 @@ const tagCanc = r => r && r.cancelamento_status
 const diaSemanaNum = iso => dt(iso).getUTCDay();          // 0 = domingo … 4 = quinta
 function proximaQuinta(iso = hoje()) { let d = iso; while (diaSemanaNum(d) !== 4) d = addDias(d, 1); return d; }
 
+// ---------------------------------------------------------------- vencimento de boletos
+const PRAZO_UTEIS = 2;   // dias úteis de compensação bancária após o vencimento
+const sitConfere = cod => !!cod && !!S.situacoes.find(s => s.codigo === cod && s.confere_vencimento);
+function addDiasUteis(iso, n) {   // sábados e domingos não contam (feriados não são considerados)
+  let d = iso, c = 0;
+  while (c < n) { d = addDias(d, 1); const w = diaSemanaNum(d); if (w !== 0 && w !== 6) c++; }
+  return d;
+}
+// 'conferir' | 'compensacao' | 'aberto' | null
+function statusVenc(r) {
+  if (!r || !r.boleto_vencimento || !sitConfere(r.situacao)) return null;
+  const h = hoje();
+  if (h <= r.boleto_vencimento) return 'aberto';
+  return h >= addDiasUteis(r.boleto_vencimento, PRAZO_UTEIS) ? 'conferir' : 'compensacao';
+}
+const diasDesde = iso => Math.round((dt(hoje()) - dt(iso)) / 864e5);
+function tagVenc(r) {
+  const st = statusVenc(r);
+  if (st === 'conferir') return `<div><span class="tag Revogado">⚠ Vencido há ${diasDesde(r.boleto_vencimento)} dia(s) – conferir pagamento</span></div>`;
+  if (st === 'compensacao') return `<div><span class="tag Em-andamento">Vencido – aguardando compensação até ${fmtData(addDiasUteis(r.boleto_vencimento, PRAZO_UTEIS))}</span></div>`;
+  return '';
+}
+// boletos a conferir do próprio usuário (ou de todos, para a supervisão)
+async function buscarBoletosAConferir(todos = false) {
+  if (!S.situacoes.some(s => s.confere_vencimento)) return [];
+  let q = sb.from('lancamentos').select('*').not('boleto_vencimento', 'is', null).lt('boleto_vencimento', hoje())
+    .in('situacao', S.situacoes.filter(s => s.confere_vencimento).map(s => s.codigo)).order('boleto_vencimento').limit(2000);
+  if (!todos) q = q.eq('funcionario_id', S.user.id);
+  const { data, error } = await q;
+  if (error) return [];
+  return (data || []).filter(r => statusVenc(r) === 'conferir');
+}
+
 async function atualizarAvisoGlobal() {
   const box = $('#avisoGlobal'); if (!box) return;
-  box.hidden = true;
-  if (!ehSup()) return;
-  const dow = diaSemanaNum(hoje());
-  if (dow !== 3 && dow !== 4) return;                     // só quarta e quinta
-  const { count } = await sb.from('lancamentos').select('id', { count: 'exact', head: true }).eq('cancelamento_status', 'Aguardando envio');
-  if (!count) return;
-  box.innerHTML = `📋 ${dow === 4 ? 'Hoje é quinta-feira' : 'Amanhã é quinta-feira'}: há <strong>${count}</strong> caso(s) aguardando o relatório de cancelamento para a Recuperação de Ativos. <a href="#/cancelamentos">Abrir cancelamentos</a>`;
-  box.hidden = false;
+  const msgs = [];
+  // boletos vencidos do próprio usuário
+  const meus = await buscarBoletosAConferir(false);
+  const link = document.querySelector('#menu a[data-rota="pendentes"]');
+  if (link) link.innerHTML = 'Pendentes' + (meus.length ? ` <span class="badge" title="Boletos vencidos para conferir">${meus.length}</span>` : '');
+  if (meus.length) msgs.push(`⚠ Você tem <strong>${meus.length}</strong> boleto(s) vencido(s) para conferir se foram pagos. <a href="#/pendentes?filtro=venc">Conferir agora</a>`);
+  // lembrete de quinta-feira (supervisão)
+  if (ehSup()) {
+    const dow = diaSemanaNum(hoje());
+    if (dow === 3 || dow === 4) {
+      const { count } = await sb.from('lancamentos').select('id', { count: 'exact', head: true }).eq('cancelamento_status', 'Aguardando envio');
+      if (count) msgs.push(`📋 ${dow === 4 ? 'Hoje é quinta-feira' : 'Amanhã é quinta-feira'}: há <strong>${count}</strong> caso(s) aguardando o relatório de cancelamento para a Recuperação de Ativos. <a href="#/cancelamentos">Abrir cancelamentos</a>`);
+    }
+  }
+  box.innerHTML = msgs.map(m => `<div>${m}</div>`).join('');
+  box.hidden = !msgs.length;
 }
 
 async function telaCancelamentos(params) {
@@ -834,14 +903,15 @@ async function telaAdmin() {
   <div class="card"><h2>Usuários</h2><p class="dica">Novos cadastros aparecem aqui como "aguardando". Marque "Ativo" e escolha o papel. Para remover alguém, desmarque "Ativo".</p>
     <div class="tabela-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Ativo</th><th></th></tr></thead><tbody id="tbUsu"></tbody></table></div></div>
   <div class="card"><h2>Situações (resultado)</h2><p class="dica">A categoria define como a situação entra nos relatórios. Desative em vez de apagar, para manter o histórico.</p>
-    <div class="tabela-wrap"><table><thead><tr><th>Situação</th><th>Categoria</th><th>Quando usar</th><th class="num">Ordem</th><th>Gera cancelamento</th><th>Ativa</th><th></th></tr></thead><tbody id="tbSit"></tbody></table></div>
+    <div class="tabela-wrap"><table><thead><tr><th>Situação</th><th>Categoria</th><th>Quando usar</th><th class="num">Ordem</th><th>Gera cancelamento</th><th>Confere vencimento</th><th>Ativa</th><th></th></tr></thead><tbody id="tbSit"></tbody></table></div>
     <form class="linha" id="fNovaSit" style="margin-top:.8rem">
       <label class="campo">Nova situação<input name="codigo" maxlength="60" required placeholder="EX.: REVOGADO – FALECIDO"></label>
       <label class="campo">Categoria<select name="categoria">${CATEGORIAS.slice(0, 4).map(c => `<option>${c}</option>`).join('')}</select></label>
       <label class="campo" style="flex:1">Quando usar<input name="descricao" maxlength="200"></label>
       <label class="campo">Gera cancelamento<input type="checkbox" name="gera"></label>
+      <label class="campo">Confere vencimento<input type="checkbox" name="confv"></label>
       <button class="btn prim">Adicionar</button></form>
-    <p class="dica">"Gera cancelamento": ao escolher a situação, o caso entra automaticamente na fila do relatório semanal à Recuperação de Ativos.</p></div>
+    <p class="dica">"Gera cancelamento": ao escolher a situação, o caso entra automaticamente na fila do relatório semanal à Recuperação de Ativos. "Confere vencimento": o sistema avisa para conferir o pagamento ${PRAZO_UTEIS} dias úteis após o vencimento do boleto.</p></div>
   <div class="card"><h2>Setores</h2><div class="tabela-wrap"><table><thead><tr><th>Setor</th><th class="num">Ordem</th><th>Ativo</th><th></th></tr></thead><tbody id="tbSet"></tbody></table></div>
     <form class="linha" id="fNovoSet" style="margin-top:.8rem"><label class="campo">Novo setor<input name="nome" maxlength="40" required></label><button class="btn prim">Adicionar</button></form></div>
   <div class="card"><h2>Auditoria (últimas 200 alterações)</h2><div class="tabela-wrap"><table><thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Tabela</th><th>Registro</th><th>Campos alterados</th></tr></thead><tbody id="tbAud"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody></table></div></div>`;
@@ -864,16 +934,17 @@ async function telaAdmin() {
     <td><select name="categoria">${CATEGORIAS.slice(0, 4).map(c => `<option ${c === s.categoria ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
     <td><input name="descricao" value="${esc(s.descricao || '')}" maxlength="200"></td><td class="num"><input name="ordem" type="number" value="${s.ordem}" style="width:5rem"></td>
     <td><input type="checkbox" name="gera" ${s.gera_cancelamento ? 'checked' : ''} aria-label="Gera cancelamento"></td>
+    <td><input type="checkbox" name="confv" ${s.confere_vencimento ? 'checked' : ''} aria-label="Confere vencimento"></td>
     <td><input type="checkbox" name="ativo" ${s.ativo ? 'checked' : ''} aria-label="Ativa"></td><td><button class="btn peq">Salvar</button></td></tr>`).join('');
   $$('tr[data-cod] button', tbS).forEach(b => b.addEventListener('click', async () => {
     const tr = b.closest('tr');
     const { error } = await sb.from('situacoes').update({ categoria: tr.querySelector('[name=categoria]').value, descricao: tr.querySelector('[name=descricao]').value.trim() || null,
-      ordem: Number(tr.querySelector('[name=ordem]').value) || 100, gera_cancelamento: tr.querySelector('[name=gera]').checked, ativo: tr.querySelector('[name=ativo]').checked }).eq('codigo', tr.dataset.cod);
+      ordem: Number(tr.querySelector('[name=ordem]').value) || 100, gera_cancelamento: tr.querySelector('[name=gera]').checked, confere_vencimento: tr.querySelector('[name=confv]').checked, ativo: tr.querySelector('[name=ativo]').checked }).eq('codigo', tr.dataset.cod);
     if (error) return toast(msgErro(error), true); toast('Situação atualizada.'); carregarTabelas();
   }));
   $('#fNovaSit').addEventListener('submit', async e => {
     e.preventDefault(); const f = e.target;
-    const { error } = await sb.from('situacoes').insert({ codigo: f.codigo.value.trim().toUpperCase().replace(/\s+-\s+/g, ' – '), categoria: f.categoria.value, descricao: f.descricao.value.trim() || null, ordem: 90, gera_cancelamento: f.gera.checked });
+    const { error } = await sb.from('situacoes').insert({ codigo: f.codigo.value.trim().toUpperCase().replace(/\s+-\s+/g, ' – '), categoria: f.categoria.value, descricao: f.descricao.value.trim() || null, ordem: 90, gera_cancelamento: f.gera.checked, confere_vencimento: f.confv.checked });
     if (error) return toast(msgErro(error), true); toast('Situação criada.'); telaAdmin();
   });
   // setores
