@@ -83,6 +83,7 @@ h1 { font-size: 1.45rem; } h2 { font-size: 1.15rem; } h3 { font-size: 1rem; }
 .linha { display: flex; gap: .75rem; flex-wrap: wrap; align-items: end; }
 .grade { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
 .grade-2 { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+.grade-2 > * { min-width: 0; }
 .cab { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: .8rem; }
 .cab h1 { margin: 0; }
 .sub { color: var(--ink-2); font-size: .9rem; margin: .2rem 0 0; }

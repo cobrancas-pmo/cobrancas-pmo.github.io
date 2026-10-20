@@ -22,7 +22,8 @@ const OPC = {
   fonte: ['Cadastro', 'Localize', 'Assertiva', 'Informado pelo contribuinte'],
   whatsapp: ['Enviado', 'Respondido', 'Sem WhatsApp'],
   sms: ['Enviado', 'Respondido'],
-  ligacao: ['Atendida', 'Não atendida', 'Número errado']
+  ligacao: ['Atendida', 'Não atendida', 'Número errado'],
+  meio_acordo: ['WhatsApp', 'SMS', 'Ligação', 'Atendimento presencial', 'Contribuinte procurou']
 };
 const RE_ID = /^[0-9A-Za-z./-]{1,30}$/;
 
@@ -61,6 +62,7 @@ function msgErro(e) {
     [/row-level security|permission denied/i, 'Você não tem permissão para esta ação.'],
     [/lancamentos_id_parcelamento_check/i, 'Id do parcelamento inválido: use apenas números/letras, sem espaços (nada de nomes).'],
     [/lancamentos_origem_check/i, 'Origem/inscrição inválida: use apenas números/letras, sem espaços.'],
+    [/lancamentos_meio_acordo_check/i, 'Meio que gerou o acordo inválido.'],
     [/lancamentos_vencimento_apos_emissao/i, 'O vencimento não pode ser anterior à emissão do boleto.'],
     [/Failed to fetch|NetworkError/i, 'Sem conexão com o servidor. Verifique sua internet.'],
     [/Invalid TOTP|invalid.*code/i, 'Código inválido. Confira o horário do celular e tente novamente.']
@@ -82,6 +84,8 @@ const S = { user: null, perfil: null, situacoes: [], setores: [], perfis: [], ch
 const ehSup = () => S.perfil && ['supervisor', 'admin'].includes(S.perfil.papel);
 const ehAdmin = () => S.perfil && S.perfil.papel === 'admin';
 const catDe = cod => (cod ? (S.situacoes.find(s => s.codigo === cod)?.categoria || 'Outros') : 'Sem situação');
+// "Meio que gerou o acordo" só faz sentido quando houve pagamento ou boleto/acordo em aberto
+const aceitaMeio = cod => catDe(cod) === 'Pago' || sitConfere(cod);
 const app = () => $('#app');
 
 // ---------------------------------------------------------------- inatividade
@@ -331,6 +335,7 @@ async function telaLancar(params) {
       <label class="campo largo">Situação<select name="situacao">${optSituacoes()}</select><span class="dica" id="descSit"></span></label>
       <label class="campo">Valor pago (R$)<input name="valor_pago" inputmode="decimal" placeholder="0,00"></label>
       <label class="campo">Data do pagamento<input type="date" name="data_pagamento"></label>
+      <label class="campo" id="cMeio">Meio que gerou o acordo<select name="meio_acordo" disabled>${optList(OPC.meio_acordo)}</select><span class="dica">Para pagos e boletos em aberto</span></label>
       <label class="campo largo">Observações <span class="dica">— não escreva nome, CPF ou telefone do contribuinte</span><textarea name="observacoes" maxlength="500"></textarea></label>
     </div></fieldset>
     <div class="acoes">
@@ -350,10 +355,13 @@ async function telaLancar(params) {
   $('#diaHoje').addEventListener('click', () => irDia(hoje()));
 
   const f = $('#fLanc');
-  const limpar = () => { f.reset(); f.registro.value = ''; $('#tituloForm').textContent = 'Novo lançamento'; $('#btnSalvar').textContent = 'Salvar lançamento'; $('#avisoDup').innerHTML = ''; $('#descSit').textContent = ''; };
+  const ajustarMeio = () => { const ok = aceitaMeio(f.situacao.value); f.meio_acordo.disabled = !ok; if (!ok) f.meio_acordo.value = ''; };
+  f._ajustarMeio = ajustarMeio;
+  const limpar = () => { f.reset(); ajustarMeio(); f.registro.value = ''; $('#tituloForm').textContent = 'Novo lançamento'; $('#btnSalvar').textContent = 'Salvar lançamento'; $('#avisoDup').innerHTML = ''; $('#descSit').textContent = ''; };
   $('#btnLimpar').addEventListener('click', limpar);
   f.situacao.addEventListener('change', () => {
     $('#descSit').textContent = S.situacoes.find(s => s.codigo === f.situacao.value)?.descricao || '';
+    ajustarMeio();
     if (catDe(f.situacao.value) === 'Pago') {
       if (!f.data_pagamento.value) f.data_pagamento.value = hoje();
       if (!f.valor_pago.value && f.valor_boleto.value) f.valor_pago.value = f.valor_boleto.value;   // sugere o valor do boleto
@@ -369,8 +377,10 @@ async function telaLancar(params) {
       fonte_contato: f.fonte_contato.value || null, whatsapp: f.whatsapp.value || null, sms: f.sms.value || null,
       ligacao: f.ligacao.value || null, agendamento: f.agendamento.value || null, boleto_emitido: f.boleto_emitido.value || null, boleto_vencimento: f.boleto_vencimento.value || null,
       parcelas: f.parcelas.value ? Number(f.parcelas.value) : null, valor_boleto: parseValor(f.valor_boleto.value), situacao: f.situacao.value || null,
-      valor_pago: parseValor(f.valor_pago.value), data_pagamento: f.data_pagamento.value || null, observacoes: f.observacoes.value.trim() || null
+      valor_pago: parseValor(f.valor_pago.value), data_pagamento: f.data_pagamento.value || null, observacoes: f.observacoes.value.trim() || null,
+      meio_acordo: f.meio_acordo.value || null
     };
+    if (!aceitaMeio(o.situacao)) o.meio_acordo = null;
     if (!RE_ID.test(o.id_parcelamento)) { f.id_parcelamento.setAttribute('aria-invalid', 'true'); f.id_parcelamento.focus(); return toast('Informe o Id do parcelamento (só números/letras, sem espaços).', true); }
     f.id_parcelamento.removeAttribute('aria-invalid');
     if (o.origem && !RE_ID.test(o.origem)) return toast('Origem/inscrição: use só números/letras, sem espaços.', true);
@@ -411,7 +421,7 @@ function editar(l) {
   const f = $('#fLanc'); if (!f) return;
   f.registro.value = l.id;
   for (const k of ['id_parcelamento', 'origem', 'agendamento', 'boleto_emitido', 'boleto_vencimento', 'parcelas', 'observacoes']) f[k].value = l[k] ?? '';
-  for (const k of ['setor', 'fonte_contato', 'whatsapp', 'sms', 'ligacao']) {
+  for (const k of ['setor', 'fonte_contato', 'whatsapp', 'sms', 'ligacao', 'meio_acordo']) {
     if (l[k] && ![...f[k].options].some(o => o.value === l[k])) f[k].insertAdjacentHTML('beforeend', `<option>${esc(l[k])}</option>`);
     f[k].value = l[k] ?? '';
   }
@@ -420,6 +430,7 @@ function editar(l) {
   f.valor_pago.value = fmtValorInput(l.valor_pago);
   f.valor_boleto.value = fmtValorInput(l.valor_boleto);
   f.data_pagamento.value = l.data_pagamento || '';
+  f.meio_acordo.disabled = !aceitaMeio(l.situacao);
   $('#tituloForm').textContent = `Editando lançamento – Id ${l.id_parcelamento}`;
   $('#btnSalvar').textContent = 'Salvar alterações';
   $('#avisoDup').innerHTML = '';
@@ -575,9 +586,10 @@ async function gerarRelatorio(f) {
   const func = f.func ? f.func.value || null : null;
   const nomeFunc = func ? (S.perfis.find(x => x.id === func)?.nome || '') : (ehSup() ? 'TODA A EQUIPE' : S.perfil.nome);
   const box = $('#rel'); box.innerHTML = '<p class="carregando">Calculando…</p>';
-  const { data: R, error } = await sb.rpc('relatorio', { p_inicio: p.ini, p_fim: p.fim, p_func: func });
+  const args = { p_inicio: p.ini, p_fim: p.fim, p_func: func };
+  const [{ data: R, error }, { data: E, error: errE }] = await Promise.all([sb.rpc('relatorio', args), sb.rpc('relatorio_eficacia', args)]);
   if (error) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(error))}</div>`; return; }
-  ULTIMO = { R, p, nomeFunc };
+  ULTIMO = { R, p, nomeFunc, E: errE ? null : E };
   destruirGraficos();
   const T = R.totais;
   const k = (rot, val, det = '', cls = '') => `<div class="kpi ${cls}"><div class="rot">${rot}</div><div class="val">${val}</div>${det ? `<div class="det">${det}</div>` : ''}</div>`;
@@ -653,6 +665,7 @@ async function gerarRelatorio(f) {
       <tr class="${T.sem_situacao ? '' : 'zero'}"><td>(sem situação)</td><td>${tag('Sem situação')}</td><td class="num">${NUM.format(T.sem_situacao)}</td><td class="num">${PCT.format(div0(T.sem_situacao, T.contatos))}</td></tr>
     </tbody></table></div></div>
   </div>
+  <div id="eficacia">${errE ? `<div class="card"><h2>Eficácia dos meios de cobrança</h2><div class="aviso erro">Não foi possível calcular: ${esc(msgErro(errE))}</div></div>` : ''}</div>
   <div class="card"><details class="tab-dados" ${porDia ? '' : 'open'}><summary>Tabela ${porDia ? 'dia a dia' : 'mês a mês'} (dados dos gráficos)</summary>
     <div class="tabela-wrap"><table><thead><tr><th>${porDia ? 'Dia' : 'Mês'}</th><th class="num">Contatos</th><th class="num">Boletos</th><th class="num">Pagamentos</th><th class="num">Valor arrecadado</th></tr></thead><tbody>
     ${serie.map(s => `<tr class="${s.contatos || s.pagos ? '' : 'zero'}"><td>${porDia ? `${s.rot} <span class="dica">${diaSemana(s.chave).slice(0, 3)}</span>` : s.rot}</td><td class="num">${NUM.format(s.contatos)}</td><td class="num">${NUM.format(s.boletos)}</td><td class="num">${NUM.format(s.pagos)}</td><td class="num">${BRL.format(s.valor)}</td></tr>`).join('')}
@@ -687,6 +700,88 @@ async function gerarRelatorio(f) {
   S.charts.push(new Chart($('#gRev'), { type: 'bar', data: { labels: revs.map(x => { const t = x.situacao.replace(/^(REVOGADO|SEM SUCESSO)\s*[–-]\s*/, '').toLowerCase(); return t.charAt(0).toUpperCase() + t.slice(1); }), datasets: [
     { label: 'Sem sucesso', data: revs.map(x => x.qtde), backgroundColor: css('--c-rev'), ...barra, maxBarThickness: 22 }] },
     options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: tip(false) }, scales: eixos(false, true) } }));
+  if (E && !errE) desenharEficacia(E, { css, barra, eixos });
+}
+
+// ---------------------------------------------------------------- EFICÁCIA DOS MEIOS
+const AMOSTRA_MIN = 20;     // abaixo disso, a linha é marcada como "amostra pequena"
+const AMOSTRA_BOA = 100;    // total de contatos a partir do qual as conclusões ficam mais firmes
+function desenharEficacia(E, { css, barra, eixos }) {
+  const box = $('#eficacia'); if (!box) return;
+  const T = E.total;
+  const conv = (a, b) => PCT.format(div0(a, b));
+  const dias = v => (v == null ? '—' : `${DEC.format(v)} dia(s)`);
+  const peq = n => (n < AMOSTRA_MIN ? ' <span class="dica" title="Poucos casos: resultado pouco confiável">*</span>' : '');
+  const vazio = (cols, txt = 'Sem lançamentos no período.') => `<tr><td colspan="${cols}" class="vazio">${txt}</td></tr>`;
+  const k = (rot, val, det = '', cls = '') => `<div class="kpi ${cls}"><div class="rot">${rot}</div><div class="val">${val}</div>${det ? `<div class="det">${det}</div>` : ''}</div>`;
+
+  if (!T.contatos) { box.innerHTML = `<div class="card"><h2>Eficácia dos meios de cobrança</h2><p class="vazio">Sem contatos no período.</p></div>`; return; }
+
+  const meios = E.por_meio.filter(m => m.meio !== 'Nenhuma ação registrada');
+  const elegiveis = meios.filter(m => m.contatos >= AMOSTRA_MIN);
+  const melhor = (elegiveis.length ? elegiveis : meios).slice().sort((a, b) => div0(b.pagos, b.contatos) - div0(a.pagos, a.contatos) || b.contatos - a.contatos)[0];
+  const combosBons = E.combinacoes.filter(c => c.contatos >= AMOSTRA_MIN && c.combinacao !== 'Nenhuma ação registrada');
+  const combos = combosBons.length ? combosBons : E.combinacoes.filter(c => c.contatos >= 3 && c.combinacao !== 'Nenhuma ação registrada');
+  const melhorCombo = combos.slice().sort((a, b) => div0(b.pagos, b.contatos) - div0(a.pagos, a.contatos) || b.contatos - a.contatos)[0];
+
+  // matriz setor × meio
+  const setores = [...new Set(E.por_setor_meio.map(x => x.setor))];
+  const colMeios = ['WhatsApp', 'SMS', 'Ligação', 'Agendamento'];
+  const cel = (st, me) => E.por_setor_meio.find(x => x.setor === st && x.meio === me);
+  const dows = [1, 2, 3, 4, 5, 6, 0].map(d => E.por_dia_semana.find(x => x.dow === d) || { dow: d, contatos: 0, respondeu: 0, pagos: 0 }).filter(x => x.contatos || (x.dow >= 1 && x.dow <= 5));
+
+  box.innerHTML = `
+  <div class="card"><h2 style="margin-top:0">Eficácia dos meios de cobrança</h2>
+    <p class="dica">Considera os <strong>contatos do período</strong> (data do contato) e a <strong>situação atual</strong> de cada um. Um mesmo contato pode ter usado mais de um meio, por isso as linhas não somam o total. "Conversão" = contatos que terminaram pagos ÷ contatos que usaram aquele meio.</p>
+    ${T.contatos < AMOSTRA_BOA ? `<div class="aviso atencao">Amostra ainda pequena (${NUM.format(T.contatos)} contato(s)). Use estes números como indicação; as conclusões ficam mais firmes a partir de ~${AMOSTRA_BOA} contatos. Linhas com <strong>*</strong> têm menos de ${AMOSTRA_MIN} casos.</div>` : ''}
+  </div>
+  <div class="kpis">
+    ${k('Meio com maior conversão', melhor ? esc(melhor.meio) : '—', melhor ? `${conv(melhor.pagos, melhor.contatos)} de conversão em ${NUM.format(melhor.contatos)} contato(s)` : '', 'destaque')}
+    ${k('Melhor combinação', melhorCombo ? esc(melhorCombo.combinacao) : '—', melhorCombo ? `${conv(melhorCombo.pagos, melhorCombo.contatos)} em ${NUM.format(melhorCombo.contatos)} contato(s)` : 'mínimo de 3 contatos')}
+    ${k('Taxa de resposta', conv(T.respondeu, T.contatos), 'respondeu WhatsApp/SMS ou atendeu a ligação')}
+    ${k('Contato falho', conv(T.contato_falho, T.contatos), 'número errado ou sem WhatsApp')}
+    ${k('Tempo até o pagamento', dias(T.dias_medio), 'média entre o contato e o pagamento')}
+  </div>
+  <div class="grade-2">
+    <div class="card"><h3>Conversão por meio utilizado</h3>
+      <div class="grafico"><canvas id="gMeio" role="img" aria-label="Conversão por meio de cobrança"></canvas></div></div>
+    <div class="card"><h3>Conversão por dia da semana do contato</h3>
+      <div class="grafico"><canvas id="gDow" role="img" aria-label="Conversão por dia da semana"></canvas></div></div>
+  </div>
+  <div class="card"><h3>Resultado por meio utilizado</h3><div class="tabela-wrap"><table><thead><tr><th>Meio</th><th class="num">Contatos</th><th class="num">Responderam</th><th class="num">Taxa de resposta</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Sem sucesso</th><th class="num">Valor recebido</th><th class="num">Tempo até pagar</th></tr></thead><tbody>
+    ${E.por_meio.map(m => `<tr><td>${esc(m.meio)}${peq(m.contatos)}</td><td class="num">${NUM.format(m.contatos)}</td><td class="num">${NUM.format(m.respondeu)}</td><td class="num">${conv(m.respondeu, m.contatos)}</td><td class="num">${NUM.format(m.pagos)}</td><td class="num"><strong>${conv(m.pagos, m.contatos)}</strong></td><td class="num">${NUM.format(m.sem_sucesso)}</td><td class="num">${BRL.format(m.valor)}</td><td class="num">${dias(m.dias_medio)}</td></tr>`).join('') || vazio(9)}
+  </tbody></table></div></div>
+  <div class="grade-2">
+    <div class="card"><h3>Respondeu x só enviado</h3><p class="dica">Quanto o resultado muda conforme a resposta obtida em cada meio.</p><div class="tabela-wrap"><table><thead><tr><th>Meio</th><th>Resultado do contato</th><th class="num">Contatos</th><th class="num">Pagos</th><th class="num">Conversão</th></tr></thead><tbody>
+      ${E.por_resposta.map(x => `<tr><td>${esc(x.meio)}</td><td>${esc(x.resp)}${peq(x.contatos)}</td><td class="num">${NUM.format(x.contatos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num"><strong>${conv(x.pagos, x.contatos)}</strong></td></tr>`).join('') || vazio(5)}
+    </tbody></table></div></div>
+    <div class="card"><h3>Combinações de meios</h3><p class="dica">Exatamente quais meios foram usados no mesmo contato.</p><div class="tabela-wrap"><table><thead><tr><th>Combinação</th><th class="num">Contatos</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Valor</th><th class="num">Tempo até pagar</th></tr></thead><tbody>
+      ${E.combinacoes.slice(0, 12).map(c => `<tr><td>${esc(c.combinacao)}${peq(c.contatos)}</td><td class="num">${NUM.format(c.contatos)}</td><td class="num">${NUM.format(c.pagos)}</td><td class="num"><strong>${conv(c.pagos, c.contatos)}</strong></td><td class="num">${BRL.format(c.valor)}</td><td class="num">${dias(c.dias_medio)}</td></tr>`).join('') || vazio(6)}
+    </tbody></table></div></div>
+  </div>
+  <div class="grade-2">
+    <div class="card"><h3>Qualidade das fontes de telefone</h3><p class="dica">"Contato falho" = número errado ou sem WhatsApp.</p><div class="tabela-wrap"><table><thead><tr><th>Fonte</th><th class="num">Contatos</th><th class="num">Resposta</th><th class="num">Contato falho</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Valor</th></tr></thead><tbody>
+      ${E.por_fonte.map(x => `<tr><td>${esc(x.fonte)}${peq(x.contatos)}</td><td class="num">${NUM.format(x.contatos)}</td><td class="num">${conv(x.respondeu, x.contatos)}</td><td class="num">${conv(x.contato_falho, x.contatos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num"><strong>${conv(x.pagos, x.contatos)}</strong></td><td class="num">${BRL.format(x.valor)}</td></tr>`).join('') || vazio(7)}
+    </tbody></table></div></div>
+    <div class="card"><h3>Meio que gerou o acordo</h3><p class="dica">Informado pelo funcionário no lançamento. ${NUM.format(T.pagos_com_meio)} de ${NUM.format(T.pagos)} pagamento(s) com o meio informado.</p><div class="tabela-wrap"><table><thead><tr><th>Meio</th><th class="num">Acordos</th><th class="num">Já pagos</th><th class="num">Valor</th><th class="num">Tempo até pagar</th></tr></thead><tbody>
+      ${E.meio_acordo.map(x => `<tr><td>${esc(x.meio)}${peq(x.acordos)}</td><td class="num">${NUM.format(x.acordos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num">${BRL.format(x.valor)}</td><td class="num">${dias(x.dias_medio)}</td></tr>`).join('') || vazio(5, 'Nenhum lançamento com o campo "Meio que gerou o acordo" preenchido.')}
+    </tbody></table></div></div>
+  </div>
+  <div class="card"><h3>Conversão por setor e meio</h3><p class="dica">Em cada célula: conversão (pagos/contatos que usaram o meio naquele setor).</p><div class="tabela-wrap"><table><thead><tr><th>Setor</th>${colMeios.map(m => `<th class="num">${m}</th>`).join('')}</tr></thead><tbody>
+    ${setores.map(st => `<tr><td>${esc(st)}</td>${colMeios.map(me => { const c = cel(st, me); return c ? `<td class="num"><strong>${conv(c.pagos, c.contatos)}</strong> <span class="dica">${c.pagos}/${c.contatos}</span></td>` : '<td class="num zero">—</td>'; }).join('')}</tr>`).join('') || vazio(5)}
+  </tbody></table></div></div>`;
+
+  const pct = v => PCT.format(v);
+  const tipPct = { callbacks: { label: c => `${c.dataset.label}: ${pct(c.parsed.x ?? c.parsed.y)}` } };
+  const eixoPct = horizontal => { const e = eixos(false, horizontal); const ax = horizontal ? e.x : e.y; ax.ticks = { callback: v => pct(v) }; ax.suggestedMax = 1; return e; };
+  S.charts.push(new Chart($('#gMeio'), { type: 'bar', data: { labels: E.por_meio.map(m => m.meio), datasets: [
+    { label: 'Taxa de resposta', data: E.por_meio.map(m => div0(m.respondeu, m.contatos)), backgroundColor: css('--s2'), ...barra, maxBarThickness: 18 },
+    { label: 'Conversão (pagos)', data: E.por_meio.map(m => div0(m.pagos, m.contatos)), backgroundColor: css('--c-pago'), ...barra, maxBarThickness: 18 }] },
+    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: 'bottom' }, tooltip: tipPct }, scales: eixoPct(true) } }));
+  S.charts.push(new Chart($('#gDow'), { type: 'bar', data: { labels: dows.map(d => SEMANA[d.dow].replace('-feira', '')), datasets: [
+    { label: 'Taxa de resposta', data: dows.map(d => div0(d.respondeu, d.contatos)), backgroundColor: css('--s2'), ...barra },
+    { label: 'Conversão (pagos)', data: dows.map(d => div0(d.pagos, d.contatos)), backgroundColor: css('--c-pago'), ...barra }] },
+    options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: true, position: 'bottom' }, tooltip: { callbacks: { label: c => `${c.dataset.label}: ${pct(c.parsed.y)}`, afterBody: it => `Contatos: ${NUM.format(dows[it[0].dataIndex].contatos)}` } } }, scales: eixoPct(false) } }));
 }
 
 function destruirGraficos() { S.charts.forEach(c => c.destroy()); S.charts = []; }
@@ -709,6 +804,24 @@ function baixarCsv() {
   serie.forEach(s => L.push([porDia ? fmtData(s.chave) : s.chave, s.contatos, s.boletos, s.pagos, n(s.valor)]));
   L.push([], ['Setor', 'Contatos', 'Pagamentos', 'Valor arrecadado']); R.por_setor.forEach(s => L.push([s.setor, s.contatos, s.pagos, n(s.valor)]));
   L.push([], ['Situação', 'Categoria', 'Qtde']); R.por_situacao.forEach(s => L.push([s.situacao, s.categoria, s.qtde])); L.push(['(sem situação)', 'Sem situação', T.sem_situacao]);
+  if (ULTIMO.E && ULTIMO.E.total.contatos) {
+    const E = ULTIMO.E; const pc = (a, b) => n((div0(a, b) * 100).toFixed(1));
+    L.push([], ['EFICÁCIA DOS MEIOS (contatos do período, situação atual)']);
+    L.push(['Meio', 'Contatos', 'Responderam', 'Taxa de resposta (%)', 'Pagos', 'Conversão (%)', 'Sem sucesso', 'Valor recebido', 'Dias até pagar (média)']);
+    E.por_meio.forEach(m => L.push([m.meio, m.contatos, m.respondeu, pc(m.respondeu, m.contatos), m.pagos, pc(m.pagos, m.contatos), m.sem_sucesso, n(m.valor), m.dias_medio == null ? '' : n(m.dias_medio)]));
+    L.push([], ['Meio', 'Resultado do contato', 'Contatos', 'Pagos', 'Conversão (%)']);
+    E.por_resposta.forEach(x => L.push([x.meio, x.resp, x.contatos, x.pagos, pc(x.pagos, x.contatos)]));
+    L.push([], ['Combinação de meios', 'Contatos', 'Pagos', 'Conversão (%)', 'Valor', 'Dias até pagar (média)']);
+    E.combinacoes.forEach(c => L.push([c.combinacao, c.contatos, c.pagos, pc(c.pagos, c.contatos), n(c.valor), c.dias_medio == null ? '' : n(c.dias_medio)]));
+    L.push([], ['Fonte do telefone', 'Contatos', 'Resposta (%)', 'Contato falho (%)', 'Pagos', 'Conversão (%)', 'Valor']);
+    E.por_fonte.forEach(x => L.push([x.fonte, x.contatos, pc(x.respondeu, x.contatos), pc(x.contato_falho, x.contatos), x.pagos, pc(x.pagos, x.contatos), n(x.valor)]));
+    L.push([], ['Meio que gerou o acordo', 'Acordos', 'Já pagos', 'Valor', 'Dias até pagar (média)']);
+    E.meio_acordo.forEach(x => L.push([x.meio, x.acordos, x.pagos, n(x.valor), x.dias_medio == null ? '' : n(x.dias_medio)]));
+    L.push([], ['Setor', 'Meio', 'Contatos', 'Pagos', 'Conversão (%)']);
+    E.por_setor_meio.forEach(x => L.push([x.setor, x.meio, x.contatos, x.pagos, pc(x.pagos, x.contatos)]));
+    L.push([], ['Dia da semana', 'Contatos', 'Responderam', 'Pagos', 'Conversão (%)']);
+    E.por_dia_semana.forEach(x => L.push([SEMANA[x.dow], x.contatos, x.respondeu, x.pagos, pc(x.pagos, x.contatos)]));
+  }
   if (ehSup()) { L.push([], ['Funcionário', 'Dias', 'Contatos', 'Boletos', 'Pagos', 'Em andamento', 'Sem sucesso', 'Valor']); R.por_funcionario.forEach(f => L.push([f.nome, f.dias, f.contatos, f.boletos, f.pagos, f.andamento, f.revogados, n(f.valor)])); }
   const csv = '﻿' + L.map(r => r.map(c => { c = String(c ?? ''); return /[;"\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c; }).join(';')).join('\r\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
