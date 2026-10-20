@@ -327,6 +327,7 @@ async function telaLancar(params) {
     <fieldset><legend>Resultado</legend><div class="grade">
       <label class="campo largo">Situação<select name="situacao">${optSituacoes()}</select><span class="dica" id="descSit"></span></label>
       <label class="campo">Valor pago (R$)<input name="valor_pago" inputmode="decimal" placeholder="0,00"></label>
+      <label class="campo">Data do pagamento<input type="date" name="data_pagamento"></label>
       <label class="campo largo">Observações <span class="dica">— não escreva nome, CPF ou telefone do contribuinte</span><textarea name="observacoes" maxlength="500"></textarea></label>
     </div></fieldset>
     <div class="acoes">
@@ -348,7 +349,10 @@ async function telaLancar(params) {
   const f = $('#fLanc');
   const limpar = () => { f.reset(); f.registro.value = ''; $('#tituloForm').textContent = 'Novo lançamento'; $('#btnSalvar').textContent = 'Salvar lançamento'; $('#avisoDup').innerHTML = ''; $('#descSit').textContent = ''; };
   $('#btnLimpar').addEventListener('click', limpar);
-  f.situacao.addEventListener('change', () => { $('#descSit').textContent = S.situacoes.find(s => s.codigo === f.situacao.value)?.descricao || ''; });
+  f.situacao.addEventListener('change', () => {
+    $('#descSit').textContent = S.situacoes.find(s => s.codigo === f.situacao.value)?.descricao || '';
+    if (catDe(f.situacao.value) === 'Pago') { if (!f.data_pagamento.value) f.data_pagamento.value = hoje(); } else f.data_pagamento.value = '';
+  });
   f.id_parcelamento.addEventListener('blur', () => verificarDuplicado(f));
   f.valor_pago.addEventListener('blur', () => { const v = parseValor(f.valor_pago.value); if (v != null && !Number.isNaN(v)) f.valor_pago.value = fmtValorInput(v); });
 
@@ -359,7 +363,7 @@ async function telaLancar(params) {
       fonte_contato: f.fonte_contato.value || null, whatsapp: f.whatsapp.value || null, sms: f.sms.value || null,
       ligacao: f.ligacao.value || null, agendamento: f.agendamento.value || null, boleto_emitido: f.boleto_emitido.value || null, boleto_vencimento: f.boleto_vencimento.value || null,
       parcelas: f.parcelas.value ? Number(f.parcelas.value) : null, situacao: f.situacao.value || null,
-      valor_pago: parseValor(f.valor_pago.value), observacoes: f.observacoes.value.trim() || null
+      valor_pago: parseValor(f.valor_pago.value), data_pagamento: f.data_pagamento.value || null, observacoes: f.observacoes.value.trim() || null
     };
     if (!RE_ID.test(o.id_parcelamento)) { f.id_parcelamento.setAttribute('aria-invalid', 'true'); f.id_parcelamento.focus(); return toast('Informe o Id do parcelamento (só números/letras, sem espaços).', true); }
     f.id_parcelamento.removeAttribute('aria-invalid');
@@ -369,6 +373,11 @@ async function telaLancar(params) {
     if (o.boleto_emitido && !o.boleto_vencimento && sitConfere(o.situacao) && !confirm('Boleto sem data de vencimento: o sistema não poderá avisar quando conferir o pagamento. Salvar mesmo assim?')) return;
     if (o.parcelas != null && !(Number.isInteger(o.parcelas) && o.parcelas >= 1 && o.parcelas <= 240)) return toast('Nº de parcelas deve ser um número inteiro de 1 a 240.', true);
     const cat = catDe(o.situacao);
+    if (cat === 'Pago') {
+      if (!o.data_pagamento) o.data_pagamento = hoje();
+      if (o.data_pagamento > hoje()) return toast('A data do pagamento não pode ser futura.', true);
+      if (o.boleto_emitido && o.data_pagamento < o.boleto_emitido && !confirm('A data do pagamento é anterior à emissão do boleto. Salvar mesmo assim?')) return;
+    } else o.data_pagamento = null;
     if (cat === 'Pago' && o.valor_pago == null && !confirm('Situação "pago" sem valor informado. Salvar mesmo assim?')) return;
     if (cat !== 'Pago' && o.valor_pago != null && !confirm('Há valor pago, mas a situação não é de pagamento. Salvar mesmo assim?')) return;
     if (/\b\d{2}\s?9?\d{4}-?\d{4}\b|\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/.test(o.observacoes || '') &&
@@ -401,6 +410,7 @@ function editar(l) {
   f.situacao.innerHTML = optSituacoes(l.situacao); f.situacao.value = l.situacao ?? '';
   $('#descSit').textContent = S.situacoes.find(s => s.codigo === l.situacao)?.descricao || '';
   f.valor_pago.value = fmtValorInput(l.valor_pago);
+  f.data_pagamento.value = l.data_pagamento || '';
   $('#tituloForm').textContent = `Editando lançamento – Id ${l.id_parcelamento}`;
   $('#btnSalvar').textContent = 'Salvar alterações';
   $('#avisoDup').innerHTML = '';
@@ -430,7 +440,7 @@ async function carregarDia(dia) {
   const valor = rows.filter(r => catDe(r.situacao) === 'Pago').reduce((a, r) => a + Number(r.valor_pago || 0), 0);
   $('#resumoDia').innerHTML = [
     ['Contatos', rows.length], ['Boletos', rows.filter(r => r.boleto_emitido).length], ['Pagos', cont('Pago')],
-    ['Em andamento', cont('Em andamento')], ['Sem sucesso', cont('Revogado')], ['Sem situação', cont('Sem situação')], ['Valor arrecadado', BRL.format(valor)]
+    ['Em andamento', cont('Em andamento')], ['Sem sucesso', cont('Revogado')], ['Sem situação', cont('Sem situação')], ['Valor pago (contatos do dia)', BRL.format(valor)]
   ].map(([r, v]) => `<div class="kpi"><div class="rot">${r}</div><div class="val">${typeof v === 'number' ? NUM.format(v) : v}</div></div>`).join('');
   $('#qtdDia').textContent = `${rows.length} contato(s)`;
   if (!rows.length) { tb.innerHTML = '<tr><td colspan="9" class="vazio">Nenhum contato lançado neste dia.</td></tr>'; return; }
@@ -440,7 +450,7 @@ async function carregarDia(dia) {
       <td>${esc(r.setor || '')}</td><td class="dica">${acoes.map(esc).join('<br>')}</td>
       <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) + (r.parcelas ? `<div class="dica">${r.parcelas} parc.</div>` : '') : ''}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
       <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagCanc(r)}</td>
-      <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : ''}</td>
+      <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : ''}${r.data_pagamento ? `<div class="dica">pago em ${fmtData(r.data_pagamento)}</div>` : ''}</td>
       <td class="obs">${esc(r.observacoes || '')}</td>
       <td><div class="acoes"><button class="btn peq" data-ed="${r.id}">Editar</button><button class="btn peq perigo" data-ex="${r.id}">Excluir</button></div></td></tr>`;
   }).join('');
@@ -585,19 +595,20 @@ async function gerarRelatorio(f) {
   box.innerHTML = `
   <div class="card"><h1 style="margin:0">Relatório de cobranças · ${esc(p.rotulo)}</h1>
     <p class="sub">${esc(nomeFunc)} · período de ${fmtData(p.ini)} a ${fmtData(p.fim)} · gerado em ${new Date().toLocaleString('pt-BR')}</p>
+    <p class="dica">Contatos, ações e resultados contam pela <strong>data do contato</strong>; pagamentos e valor arrecadado, pela <strong>data do pagamento</strong>.</p>
     ${alertas.map(a => `<div class="aviso atencao">${esc(a)}</div>`).join('')}</div>
   <div class="kpis">
     ${k('Contatos realizados', NUM.format(T.contatos), `${NUM.format(T.dias)} dia(s) trabalhado(s)`, 'destaque')}
     ${k('Boletos gerados', NUM.format(T.boletos))}
-    ${k('Boletos pagos', NUM.format(T.pagos), `${NUM.format(T.parcelas)} parcela(s) paga(s)`)}
+    ${k('Pagamentos no período', NUM.format(T.pagos), `pela data do pagamento · ${NUM.format(T.parcelas)} parcela(s)`)}
     ${k('Em andamento', NUM.format(T.andamento))}
     ${k('Sem sucesso', NUM.format(T.revogados))}
-    ${k('Valor arrecadado', BRL.format(T.valor), '', 'destaque')}
+    ${k('Valor arrecadado', BRL.format(T.valor), 'pela data do pagamento', 'destaque')}
   </div>
   <div class="kpis">
-    ${k('Conversão', PCT.format(div0(T.pagos, T.contatos)), 'pagos ÷ contatos')}
-    ${k('Efetividade dos boletos', PCT.format(div0(T.pagos, T.boletos)), 'pagos ÷ boletos gerados')}
-    ${k('Ticket médio', BRL.format(div0(T.valor, T.pagos)), 'valor ÷ pagos')}
+    ${k('Conversão dos contatos', PCT.format(div0(T.pagos_contatos, T.contatos)), `${NUM.format(T.pagos_contatos || 0)} contato(s) do período já pagos`)}
+    ${k('Efetividade dos boletos', PCT.format(div0(T.pagos_contatos, T.boletos)), 'boletos do período já pagos')}
+    ${k('Ticket médio', BRL.format(div0(T.valor, T.pagos)), 'valor ÷ pagamentos')}
     ${k('Contatos por dia', DEC.format(div0(T.contatos, T.dias)))}
     ${k('Ações', `${NUM.format(T.whatsapp + T.sms + T.ligacoes)}`, `WhatsApp ${NUM.format(T.whatsapp)} · SMS ${NUM.format(T.sms)} · Ligações ${NUM.format(T.ligacoes)}`)}
     ${k('Agendamentos', NUM.format(T.agendamentos))}
@@ -610,7 +621,7 @@ async function gerarRelatorio(f) {
   </div>
   <div class="grade-2">
     <div class="card"><h3>Contatos, boletos e pagos ${porDia ? 'por dia' : 'por mês'}</h3>
-      <div class="legenda"><span style="--cor:var(--s1)">Contatos</span><span style="--cor:var(--s2)">Boletos</span><span style="--cor:var(--s3)">Pagos</span></div>
+      <div class="legenda"><span style="--cor:var(--s1)">Contatos</span><span style="--cor:var(--s2)">Boletos</span><span style="--cor:var(--s3)">Pagamentos (data do pagamento)</span></div>
       <div class="grafico"><canvas id="gQtd" role="img" aria-label="Contatos, boletos e pagos ao longo do período"></canvas></div></div>
     <div class="card"><h3>Valor arrecadado ${porDia ? 'por dia' : 'por mês'} (R$)</h3>
       <div class="grafico"><canvas id="gValor" role="img" aria-label="Valor arrecadado ao longo do período"></canvas></div></div>
@@ -621,12 +632,12 @@ async function gerarRelatorio(f) {
       <div class="grafico"><canvas id="gRev" role="img" aria-label="Quantidade por motivo sem sucesso"></canvas></div></div>
   </div>
   ${ehSup() && !func ? `<div class="card"><h3>Resultado por funcionário</h3><div class="tabela-wrap"><table><thead><tr><th>Funcionário</th><th class="num">Dias</th><th class="num">Contatos</th><th class="num">Boletos</th><th class="num">Pagos</th><th class="num">Em andam.</th><th class="num">Sem suc.</th><th class="num">Conversão</th><th class="num">Valor</th><th class="num">% do valor</th></tr></thead><tbody>
-    ${R.por_funcionario.map(x => `<tr><td>${esc(x.nome)}</td><td class="num">${x.dias}</td><td class="num">${NUM.format(x.contatos)}</td><td class="num">${NUM.format(x.boletos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num">${NUM.format(x.andamento)}</td><td class="num">${NUM.format(x.revogados)}</td><td class="num">${PCT.format(div0(x.pagos, x.contatos))}</td><td class="num">${BRL.format(x.valor)}</td><td class="num">${PCT.format(div0(x.valor, T.valor))}</td></tr>`).join('') || '<tr><td colspan="10" class="vazio">Sem lançamentos no período.</td></tr>'}
-    <tr class="total"><td>Total</td><td class="num">${NUM.format(T.dias)}</td><td class="num">${NUM.format(T.contatos)}</td><td class="num">${NUM.format(T.boletos)}</td><td class="num">${NUM.format(T.pagos)}</td><td class="num">${NUM.format(T.andamento)}</td><td class="num">${NUM.format(T.revogados)}</td><td class="num">${PCT.format(div0(T.pagos, T.contatos))}</td><td class="num">${BRL.format(T.valor)}</td><td class="num">${T.valor ? '100,0%' : ''}</td></tr>
+    ${R.por_funcionario.map(x => `<tr><td>${esc(x.nome)}</td><td class="num">${x.dias}</td><td class="num">${NUM.format(x.contatos)}</td><td class="num">${NUM.format(x.boletos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num">${NUM.format(x.andamento)}</td><td class="num">${NUM.format(x.revogados)}</td><td class="num">${PCT.format(div0(x.pagos_contatos, x.contatos))}</td><td class="num">${BRL.format(x.valor)}</td><td class="num">${PCT.format(div0(x.valor, T.valor))}</td></tr>`).join('') || '<tr><td colspan="10" class="vazio">Sem lançamentos no período.</td></tr>'}
+    <tr class="total"><td>Total</td><td class="num">${NUM.format(T.dias)}</td><td class="num">${NUM.format(T.contatos)}</td><td class="num">${NUM.format(T.boletos)}</td><td class="num">${NUM.format(T.pagos)}</td><td class="num">${NUM.format(T.andamento)}</td><td class="num">${NUM.format(T.revogados)}</td><td class="num">${PCT.format(div0(T.pagos_contatos, T.contatos))}</td><td class="num">${BRL.format(T.valor)}</td><td class="num">${T.valor ? '100,0%' : ''}</td></tr>
     </tbody></table></div></div>` : ''}
   <div class="grade-2">
-    <div class="card"><h3>Resultado por setor</h3><div class="tabela-wrap"><table><thead><tr><th>Setor</th><th class="num">Contatos</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Valor</th></tr></thead><tbody>
-      ${R.por_setor.map(x => `<tr><td>${esc(x.setor)}</td><td class="num">${NUM.format(x.contatos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num">${PCT.format(div0(x.pagos, x.contatos))}</td><td class="num">${BRL.format(x.valor)}</td></tr>`).join('') || '<tr><td colspan="5" class="vazio">Sem lançamentos.</td></tr>'}
+    <div class="card"><h3>Resultado por setor</h3><div class="tabela-wrap"><table><thead><tr><th>Setor</th><th class="num">Contatos</th><th class="num">Pagamentos</th><th class="num">Conversão</th><th class="num">Valor</th></tr></thead><tbody>
+      ${R.por_setor.map(x => `<tr><td>${esc(x.setor)}</td><td class="num">${NUM.format(x.contatos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num">${PCT.format(div0(x.pagos_contatos, x.contatos))}</td><td class="num">${BRL.format(x.valor)}</td></tr>`).join('') || '<tr><td colspan="5" class="vazio">Sem lançamentos.</td></tr>'}
     </tbody></table></div></div>
     <div class="card"><h3>Resultado por situação</h3><div class="tabela-wrap"><table><thead><tr><th>Situação</th><th>Categoria</th><th class="num">Qtde</th><th class="num">%</th></tr></thead><tbody>
       ${R.por_situacao.map(x => `<tr class="${x.qtde ? '' : 'zero'}"><td>${esc(x.situacao)}</td><td>${tag(x.categoria)}</td><td class="num">${NUM.format(x.qtde)}</td><td class="num">${PCT.format(div0(x.qtde, T.contatos))}</td></tr>`).join('')}
@@ -634,9 +645,9 @@ async function gerarRelatorio(f) {
     </tbody></table></div></div>
   </div>
   <div class="card"><details class="tab-dados" ${porDia ? '' : 'open'}><summary>Tabela ${porDia ? 'dia a dia' : 'mês a mês'} (dados dos gráficos)</summary>
-    <div class="tabela-wrap"><table><thead><tr><th>${porDia ? 'Dia' : 'Mês'}</th><th class="num">Contatos</th><th class="num">Boletos</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Valor</th></tr></thead><tbody>
-    ${serie.map(s => `<tr class="${s.contatos ? '' : 'zero'}"><td>${porDia ? `${s.rot} <span class="dica">${diaSemana(s.chave).slice(0, 3)}</span>` : s.rot}</td><td class="num">${NUM.format(s.contatos)}</td><td class="num">${NUM.format(s.boletos)}</td><td class="num">${NUM.format(s.pagos)}</td><td class="num">${s.contatos ? PCT.format(div0(s.pagos, s.contatos)) : ''}</td><td class="num">${BRL.format(s.valor)}</td></tr>`).join('')}
-    <tr class="total"><td>Total</td><td class="num">${NUM.format(T.contatos)}</td><td class="num">${NUM.format(T.boletos)}</td><td class="num">${NUM.format(T.pagos)}</td><td class="num">${PCT.format(div0(T.pagos, T.contatos))}</td><td class="num">${BRL.format(T.valor)}</td></tr>
+    <div class="tabela-wrap"><table><thead><tr><th>${porDia ? 'Dia' : 'Mês'}</th><th class="num">Contatos</th><th class="num">Boletos</th><th class="num">Pagamentos</th><th class="num">Valor arrecadado</th></tr></thead><tbody>
+    ${serie.map(s => `<tr class="${s.contatos || s.pagos ? '' : 'zero'}"><td>${porDia ? `${s.rot} <span class="dica">${diaSemana(s.chave).slice(0, 3)}</span>` : s.rot}</td><td class="num">${NUM.format(s.contatos)}</td><td class="num">${NUM.format(s.boletos)}</td><td class="num">${NUM.format(s.pagos)}</td><td class="num">${BRL.format(s.valor)}</td></tr>`).join('')}
+    <tr class="total"><td>Total</td><td class="num">${NUM.format(T.contatos)}</td><td class="num">${NUM.format(T.boletos)}</td><td class="num">${NUM.format(T.pagos)}</td><td class="num">${BRL.format(T.valor)}</td></tr>
     </tbody></table></div></details></div>`;
 
   // ------- gráficos
@@ -655,7 +666,7 @@ async function gerarRelatorio(f) {
   S.charts.push(new Chart($('#gQtd'), { type: 'bar', data: { labels: rots, datasets: [
     { label: 'Contatos', data: serie.map(s => s.contatos), backgroundColor: css('--s1'), ...barra },
     { label: 'Boletos', data: serie.map(s => s.boletos), backgroundColor: css('--s2'), ...barra },
-    { label: 'Pagos', data: serie.map(s => s.pagos), backgroundColor: css('--s3'), ...barra }] },
+    { label: 'Pagamentos', data: serie.map(s => s.pagos), backgroundColor: css('--s3'), ...barra }] },
     options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: false }, tooltip: tip(false) }, scales: eixos() } }));
   S.charts.push(new Chart($('#gValor'), { type: 'bar', data: { labels: rots, datasets: [
     { label: 'Valor', data: serie.map(s => s.valor), backgroundColor: css('--s1'), ...barra }] },
@@ -680,14 +691,14 @@ function baixarCsv() {
   L.push(['Relatório de cobranças', p.rotulo], ['Funcionário', nomeFunc], ['Período', `${fmtData(p.ini)} a ${fmtData(p.fim)}`], []);
   L.push(['Indicador', 'Valor']);
   [['Contatos', T.contatos], ['Dias trabalhados', T.dias], ['WhatsApp', T.whatsapp], ['SMS', T.sms], ['Ligações', T.ligacoes], ['Agendamentos', T.agendamentos],
-   ['Boletos gerados', T.boletos], ['Pagos', T.pagos], ['Em andamento', T.andamento], ['Sem sucesso', T.revogados], ['Outros', T.outros], ['Sem situação', T.sem_situacao],
-   ['Valor arrecadado', n(T.valor)], ['Parcelas pagas', T.parcelas], ['Conversão (%)', n((div0(T.pagos, T.contatos) * 100).toFixed(1))],
-   ['Efetividade boletos (%)', n((div0(T.pagos, T.boletos) * 100).toFixed(1))], ['Ticket médio', n(div0(T.valor, T.pagos).toFixed(2))],
+   ['Boletos gerados', T.boletos], ['Contatos do período já pagos', T.pagos_contatos || 0], ['Pagamentos no período (data do pagamento)', T.pagos], ['Em andamento', T.andamento], ['Sem sucesso', T.revogados], ['Outros', T.outros], ['Sem situação', T.sem_situacao],
+   ['Valor arrecadado (data do pagamento)', n(T.valor)], ['Parcelas pagas', T.parcelas], ['Conversão dos contatos (%)', n((div0(T.pagos_contatos, T.contatos) * 100).toFixed(1))],
+   ['Efetividade boletos (%)', n((div0(T.pagos_contatos, T.boletos) * 100).toFixed(1))], ['Ticket médio', n(div0(T.valor, T.pagos).toFixed(2))],
    ['Cancelamento: aguardando envio', T.canc_aguardando || 0], ['Encaminhados à Recuperação de Ativos', T.canc_enviados || 0],
    ['Acordos revogados pelo setor', T.canc_cancelados || 0], ['Não revogados pelo setor', T.canc_devolvidos || 0]].forEach(x => L.push(x));
-  L.push([], [porDia ? 'Dia' : 'Mês', 'Contatos', 'Boletos', 'Pagos', 'Valor']);
+  L.push([], [porDia ? 'Dia' : 'Mês', 'Contatos', 'Boletos', 'Pagamentos', 'Valor arrecadado']);
   serie.forEach(s => L.push([porDia ? fmtData(s.chave) : s.chave, s.contatos, s.boletos, s.pagos, n(s.valor)]));
-  L.push([], ['Setor', 'Contatos', 'Pagos', 'Valor']); R.por_setor.forEach(s => L.push([s.setor, s.contatos, s.pagos, n(s.valor)]));
+  L.push([], ['Setor', 'Contatos', 'Pagamentos', 'Valor arrecadado']); R.por_setor.forEach(s => L.push([s.setor, s.contatos, s.pagos, n(s.valor)]));
   L.push([], ['Situação', 'Categoria', 'Qtde']); R.por_situacao.forEach(s => L.push([s.situacao, s.categoria, s.qtde])); L.push(['(sem situação)', 'Sem situação', T.sem_situacao]);
   if (ehSup()) { L.push([], ['Funcionário', 'Dias', 'Contatos', 'Boletos', 'Pagos', 'Em andamento', 'Sem sucesso', 'Valor']); R.por_funcionario.forEach(f => L.push([f.nome, f.dias, f.contatos, f.boletos, f.pagos, f.andamento, f.revogados, n(f.valor)])); }
   const csv = '﻿' + L.map(r => r.map(c => { c = String(c ?? ''); return /[;"\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c; }).join(';')).join('\r\n');
