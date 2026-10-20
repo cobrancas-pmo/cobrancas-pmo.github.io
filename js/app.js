@@ -357,7 +357,7 @@ async function telaLancar(params) {
   const f = $('#fLanc');
   const ajustarMeio = () => { const ok = aceitaMeio(f.situacao.value); f.meio_acordo.disabled = !ok; if (!ok) f.meio_acordo.value = ''; };
   f._ajustarMeio = ajustarMeio;
-  const limpar = () => { f.reset(); ajustarMeio(); f.registro.value = ''; $('#tituloForm').textContent = 'Novo lançamento'; $('#btnSalvar').textContent = 'Salvar lançamento'; $('#avisoDup').innerHTML = ''; $('#descSit').textContent = ''; };
+  const limpar = () => { f.reset(); f._wppConferido = null; ajustarMeio(); f.registro.value = ''; $('#tituloForm').textContent = 'Novo lançamento'; $('#btnSalvar').textContent = 'Salvar lançamento'; $('#avisoDup').innerHTML = ''; $('#descSit').textContent = ''; };
   $('#btnLimpar').addEventListener('click', limpar);
   f.situacao.addEventListener('change', () => {
     $('#descSit').textContent = S.situacoes.find(s => s.codigo === f.situacao.value)?.descricao || '';
@@ -398,6 +398,12 @@ async function telaLancar(params) {
     } else o.data_pagamento = null;
     if (cat === 'Pago' && o.valor_pago == null && !confirm('Situação "pago" sem valor informado. Salvar mesmo assim?')) return;
     if (cat !== 'Pago' && o.valor_pago != null && !confirm('Há valor pago, mas a situação não é de pagamento. Salvar mesmo assim?')) return;
+    // o primeiro contato é sempre via WhatsApp: ajuda a manter o funil correto
+    if (!o.whatsapp && !confirm('O primeiro contato é sempre via WhatsApp, mas o campo WhatsApp está vazio.\n\nOK = salvar assim mesmo\nCancelar = voltar e informar (Enviado, Respondido ou Sem WhatsApp)')) { f.whatsapp.focus(); return; }
+    if (o.whatsapp === 'Enviado' && (cat === 'Pago' || o.boleto_emitido) && f._wppConferido !== (f.registro.value || 'novo')) {
+      f._wppConferido = f.registro.value || 'novo';
+      if (confirm('Houve acordo/pagamento, mas o WhatsApp está só como "Enviado".\nO contribuinte respondeu pelo WhatsApp?\n\nOK = sim, marcar como "Respondido"\nCancelar = não, manter "Enviado"')) { o.whatsapp = 'Respondido'; f.whatsapp.value = 'Respondido'; }
+    }
     if (/\b\d{2}\s?9?\d{4}-?\d{4}\b|\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/.test(o.observacoes || '') &&
         !confirm('As observações parecem conter telefone ou CPF. Dados pessoais não devem ser registrados aqui. Salvar mesmo assim?')) return;
     const b = $('#btnSalvar'); b.disabled = true;
@@ -431,6 +437,7 @@ function editar(l) {
   f.valor_boleto.value = fmtValorInput(l.valor_boleto);
   f.data_pagamento.value = l.data_pagamento || '';
   f.meio_acordo.disabled = !aceitaMeio(l.situacao);
+  f._wppConferido = null;
   $('#tituloForm').textContent = `Editando lançamento – Id ${l.id_parcelamento}`;
   $('#btnSalvar').textContent = 'Salvar alterações';
   $('#avisoDup').innerHTML = '';
@@ -706,6 +713,45 @@ async function gerarRelatorio(f) {
 // ---------------------------------------------------------------- EFICÁCIA DOS MEIOS
 const AMOSTRA_MIN = 20;     // abaixo disso, a linha é marcada como "amostra pequena"
 const AMOSTRA_BOA = 100;    // total de contatos a partir do qual as conclusões ficam mais firmes
+function htmlFunil(F, T) {
+  if (!F || !F.resumo || !F.resumo.contatos) return '';
+  const R = F.resumo, tot = R.contatos;
+  const conv = (a, b) => PCT.format(div0(a, b));
+  const linha = (rot, n, det, cor, nivel = 0) => `<div class="funil-linha" style="--nivel:${nivel}">
+      <div class="funil-rot">${rot}${det ? `<span class="dica">${det}</span>` : ''}</div>
+      <div class="funil-barra"><span style="width:${Math.max(div0(n, tot) * 100, n ? 1.5 : 0).toFixed(1)}%;background:var(${cor})"></span></div>
+      <div class="funil-num"><strong>${NUM.format(n)}</strong> <span class="dica">${conv(n, tot)}</span></div></div>`;
+  const avisos = [];
+  if (R.wpp_nao_informado) avisos.push(`${NUM.format(R.wpp_nao_informado)} contato(s) sem o status do WhatsApp informado.`);
+  if (R.pagos_so_enviado) avisos.push(`${NUM.format(R.pagos_so_enviado)} pagamento(s) com o WhatsApp só como "Enviado". Se o contribuinte respondeu, atualize para "Respondido" para a taxa de resposta ficar correta.`);
+  const peq = n => (n < AMOSTRA_MIN ? ' <span class="dica" title="Poucos casos: resultado pouco confiável">*</span>' : '');
+  const statusRot = { 'Respondido': 'Respondeu', 'Enviado': 'Enviado, sem resposta', 'Sem WhatsApp': 'Sem WhatsApp', 'Não informado': 'Não informado' };
+  const st2 = [...new Set(F.etapa2.map(x => x.status_wpp))];
+  return `<div class="card"><h3 style="margin-top:0">Funil a partir do WhatsApp</h3>
+    <p class="dica">O primeiro contato é sempre via WhatsApp (etapa 1). SMS, ligação e agendamento formam a 2ª etapa. "Resolvido no WhatsApp" = pago usando só o WhatsApp, ou com o meio do acordo informado como WhatsApp.</p>
+    ${avisos.map(a => `<div class="aviso atencao">${esc(a)}</div>`).join('')}
+    <div class="funil">
+      ${linha('Contatos no período', tot, '', '--s1')}
+      ${linha('WhatsApp enviado', R.wpp_enviado, 'etapa 1', '--s1', 1)}
+      ${linha('Responderam no WhatsApp', R.wpp_respondeu, `${conv(R.wpp_respondeu, R.wpp_enviado)} dos enviados`, '--s2', 2)}
+      ${linha('Resolvidos no WhatsApp (pagos)', R.resolvidos_wpp, '', '--c-pago', 3)}
+      ${linha('Foram para a 2ª etapa', R.foram_2a, 'SMS, ligação ou agendamento', '--s1', 1)}
+      ${linha('Recuperados na 2ª etapa (pagos)', R.recuperados_2a, `${conv(R.recuperados_2a, R.foram_2a)} dos que foram para a 2ª etapa`, '--c-pago', 3)}
+      ${R.pagos_fora_funil ? linha('Pagos sem WhatsApp efetivo nem 2ª etapa', R.pagos_fora_funil, 'ex.: sem WhatsApp e o contribuinte procurou', '--c-pago', 1) : ''}
+      ${linha('Ainda em andamento', R.andamento, '', '--c-and', 1)}
+      ${linha('Sem sucesso', R.sem_sucesso, '', '--c-rev', 1)}
+      ${R.sem_wpp ? linha('Sem WhatsApp (número sem WhatsApp)', R.sem_wpp, '', '--c-sem', 1) : ''}
+    </div></div>
+  <div class="grade-2">
+    <div class="card"><h3>Etapa 1 – resultado conforme o WhatsApp</h3><div class="tabela-wrap"><table><thead><tr><th>WhatsApp</th><th class="num">Contatos</th><th class="num">Só WhatsApp</th><th class="num">Resolvidos no WhatsApp</th><th class="num">Foram p/ 2ª etapa</th><th class="num">Pagos (total)</th><th class="num">Conversão</th></tr></thead><tbody>
+      ${F.etapa1.map(x => `<tr><td>${esc(statusRot[x.status] || x.status)}${peq(x.contatos)}</td><td class="num">${NUM.format(x.contatos)}</td><td class="num">${NUM.format(x.so_wpp)}</td><td class="num">${NUM.format(x.resolvidos_wpp)}</td><td class="num">${NUM.format(x.foram_2a)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num"><strong>${conv(x.pagos, x.contatos)}</strong></td></tr>`).join('')}
+    </tbody></table></div></div>
+    <div class="card"><h3>Etapa 2 – qual meio recuperou o caso</h3><p class="dica">Conversão de cada meio da 2ª etapa, conforme o que aconteceu no WhatsApp.</p><div class="tabela-wrap"><table><thead><tr><th>Situação no WhatsApp</th><th>Meio da 2ª etapa</th><th class="num">Contatos</th><th class="num">Pagos</th><th class="num">Conversão</th></tr></thead><tbody>
+      ${st2.map(st => F.etapa2.filter(x => x.status_wpp === st).map((x, i) => `<tr><td>${i ? '' : esc(statusRot[st] || st)}</td><td>${esc(x.meio)}${peq(x.contatos)}</td><td class="num">${NUM.format(x.contatos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num"><strong>${conv(x.pagos, x.contatos)}</strong></td></tr>`).join('')).join('') || '<tr><td colspan="5" class="vazio">Nenhum caso foi para a 2ª etapa.</td></tr>'}
+    </tbody></table></div></div>
+  </div>`;
+}
+
 function desenharEficacia(E, { css, barra, eixos }) {
   const box = $('#eficacia'); if (!box) return;
   const T = E.total;
@@ -735,6 +781,7 @@ function desenharEficacia(E, { css, barra, eixos }) {
     <p class="dica">Considera os <strong>contatos do período</strong> (data do contato) e a <strong>situação atual</strong> de cada um. Um mesmo contato pode ter usado mais de um meio, por isso as linhas não somam o total. "Conversão" = contatos que terminaram pagos ÷ contatos que usaram aquele meio.</p>
     ${T.contatos < AMOSTRA_BOA ? `<div class="aviso atencao">Amostra ainda pequena (${NUM.format(T.contatos)} contato(s)). Use estes números como indicação; as conclusões ficam mais firmes a partir de ~${AMOSTRA_BOA} contatos. Linhas com <strong>*</strong> têm menos de ${AMOSTRA_MIN} casos.</div>` : ''}
   </div>
+  ${htmlFunil(E.funil, T)}
   <div class="kpis">
     ${k('Meio com maior conversão', melhor ? esc(melhor.meio) : '—', melhor ? `${conv(melhor.pagos, melhor.contatos)} de conversão em ${NUM.format(melhor.contatos)} contato(s)` : '', 'destaque')}
     ${k('Melhor combinação', melhorCombo ? esc(melhorCombo.combinacao) : '—', melhorCombo ? `${conv(melhorCombo.pagos, melhorCombo.contatos)} em ${NUM.format(melhorCombo.contatos)} contato(s)` : 'mínimo de 3 contatos')}
@@ -807,6 +854,18 @@ function baixarCsv() {
   if (ULTIMO.E && ULTIMO.E.total.contatos) {
     const E = ULTIMO.E; const pc = (a, b) => n((div0(a, b) * 100).toFixed(1));
     L.push([], ['EFICÁCIA DOS MEIOS (contatos do período, situação atual)']);
+    if (E.funil && E.funil.resumo) {
+      const F = E.funil, R2 = F.resumo;
+      L.push([], ['FUNIL A PARTIR DO WHATSAPP', 'Quantidade', '% dos contatos']);
+      [['Contatos no período', R2.contatos], ['WhatsApp enviado', R2.wpp_enviado], ['Responderam no WhatsApp', R2.wpp_respondeu], ['Resolvidos no WhatsApp (pagos)', R2.resolvidos_wpp],
+       ['Foram para a 2ª etapa', R2.foram_2a], ['Recuperados na 2ª etapa (pagos)', R2.recuperados_2a], ['Pagos sem WhatsApp efetivo nem 2ª etapa', R2.pagos_fora_funil || 0], ['Ainda em andamento', R2.andamento], ['Sem sucesso', R2.sem_sucesso],
+       ['Sem WhatsApp', R2.sem_wpp], ['WhatsApp não informado', R2.wpp_nao_informado]].forEach(([a, b]) => L.push([a, b, pc(b, R2.contatos)]));
+      L.push([], ['Etapa 1 – WhatsApp', 'Contatos', 'Só WhatsApp', 'Resolvidos no WhatsApp', 'Foram p/ 2ª etapa', 'Pagos', 'Conversão (%)']);
+      F.etapa1.forEach(x => L.push([x.status, x.contatos, x.so_wpp, x.resolvidos_wpp, x.foram_2a, x.pagos, pc(x.pagos, x.contatos)]));
+      L.push([], ['Etapa 2 – situação no WhatsApp', 'Meio', 'Contatos', 'Pagos', 'Conversão (%)']);
+      F.etapa2.forEach(x => L.push([x.status_wpp, x.meio, x.contatos, x.pagos, pc(x.pagos, x.contatos)]));
+      L.push([]);
+    }
     L.push(['Meio', 'Contatos', 'Responderam', 'Taxa de resposta (%)', 'Pagos', 'Conversão (%)', 'Sem sucesso', 'Valor recebido', 'Dias até pagar (média)']);
     E.por_meio.forEach(m => L.push([m.meio, m.contatos, m.respondeu, pc(m.respondeu, m.contatos), m.pagos, pc(m.pagos, m.contatos), m.sem_sucesso, n(m.valor), m.dias_medio == null ? '' : n(m.dias_medio)]));
     L.push([], ['Meio', 'Resultado do contato', 'Contatos', 'Pagos', 'Conversão (%)']);

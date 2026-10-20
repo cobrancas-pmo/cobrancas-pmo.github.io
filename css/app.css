@@ -216,3 +216,17 @@ tr.linha-alerta td { background: color-mix(in srgb, var(--bad-soft) 70%, transpa
   .documento .obs { max-width: none; }
   input, select, textarea { border: 0; }
 }
+
+/* funil do WhatsApp (relatórios) */
+.funil { display: grid; gap: .35rem; margin-top: .6rem; }
+.funil-linha { display: grid; grid-template-columns: minmax(150px, 2.2fr) 3fr minmax(90px, auto); gap: .6rem; align-items: center; padding-left: calc(var(--nivel, 0) * .9rem); }
+.funil-rot { font-size: .88rem; line-height: 1.25; }
+.funil-rot .dica { display: block; font-size: .75rem; }
+.funil-barra { background: var(--grid); border-radius: 4px; height: 14px; overflow: hidden; }
+.funil-barra span { display: block; height: 100%; border-radius: 4px; }
+.funil-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 600px) {
+  .funil-linha { grid-template-columns: 1fr auto; padding-left: calc(var(--nivel, 0) * .5rem); }
+  .funil-barra { grid-column: 1 / -1; grid-row: 2; }
+}
+@media print { .funil-barra span { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
