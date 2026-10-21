@@ -90,7 +90,7 @@ h1 { font-size: 1.45rem; } h2 { font-size: 1.15rem; } h3 { font-size: 1rem; }
 .dica { color: var(--muted); font-size: .82rem; }
 
 /* forms */
-label.campo { display: flex; flex-direction: column; gap: .25rem; font-size: .82rem; font-weight: 600; color: var(--ink-2); min-width: 0; }
+label.campo, div.campo { display: flex; flex-direction: column; gap: .25rem; font-size: .82rem; font-weight: 600; color: var(--ink-2); min-width: 0; }
 label.campo.largo { grid-column: 1 / -1; }
 input, select, textarea { font: inherit; font-size: .95rem; color: var(--ink); background: var(--surface);
   border: 1px solid var(--line); border-radius: 8px; padding: .5rem .6rem; width: 100%; min-width: 0; }

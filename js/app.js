@@ -698,6 +698,7 @@ async function telaBuscar(params = {}) {
 function periodo(tipo, ano, n, ini, fim) {
   ano = Number(ano); n = Number(n);
   if (tipo === 'personalizado') return { ini, fim, rotulo: `${fmtData(ini)} a ${fmtData(fim)}` };
+  if (tipo === 'dia') return { ini, fim: ini, rotulo: ini ? `DIA ${fmtData(ini)} (${diaSemana(ini).toUpperCase()})` : '' };
   let m1 = 1, m2 = 12, rot = `ANO DE ${ano}`;
   if (tipo === 'mes') { m1 = m2 = n; rot = `${MESES[n - 1].toUpperCase()}/${ano}`; }
   if (tipo === 'trimestre') { m1 = 3 * n - 2; m2 = 3 * n; rot = `${n}º TRIMESTRE DE ${ano} (${MES_ABR[m1 - 1]}–${MES_ABR[m2 - 1]})`; }
@@ -713,10 +714,15 @@ function telaRelatorios(params) {
     <div class="acoes"><button class="btn" id="btnImprimir">Imprimir / salvar PDF</button><button class="btn" id="btnCsv">Baixar resumo (CSV)</button></div></div>
   <form class="card nao-imprimir" id="fRel"><div class="linha">
     <label class="campo">Período<select name="tipo">
-      <option value="mes">Mensal</option><option value="trimestre">Trimestral</option><option value="semestre">Semestral</option>
+      <option value="dia">Diário</option><option value="mes" selected>Mensal</option><option value="trimestre">Trimestral</option><option value="semestre">Semestral</option>
       <option value="ano">Anual</option><option value="personalizado">Personalizado</option></select></label>
     <label class="campo" id="cAno">Ano<select name="ano">${anos.map(y => `<option>${y}</option>`).join('')}</select></label>
     <label class="campo" id="cNum">Mês<select name="n"></select></label>
+    <div class="campo" id="cDia" hidden><span>Dia</span><div class="barra-dia">
+      <button class="btn" type="button" id="relDiaAnt" title="Dia anterior" aria-label="Dia anterior">‹</button>
+      <input type="date" name="dia" aria-label="Dia do relatório">
+      <button class="btn" type="button" id="relDiaProx" title="Próximo dia" aria-label="Próximo dia">›</button>
+      <button class="btn" type="button" id="relDiaHoje">Hoje</button></div></div>
     <label class="campo" id="cIni" hidden>De<input type="date" name="ini"></label>
     <label class="campo" id="cFim" hidden>Até<input type="date" name="fim"></label>
     ${ehSup() ? `<label class="campo">Funcionário<select name="func"><option value="">Toda a equipe</option>${S.perfis.map(p => `<option value="${p.id}">${esc(p.nome)}${p.ativo ? '' : ' (inativo)'}</option>`).join('')}</select></label>` : ''}
@@ -725,7 +731,7 @@ function telaRelatorios(params) {
   const f = $('#fRel');
   const ajustarN = () => {
     const t = f.tipo.value; const ops = { mes: MESES.map((m, i) => [i + 1, m]), trimestre: [1, 2, 3, 4].map(i => [i, `${i}º trimestre`]), semestre: [[1, '1º semestre'], [2, '2º semestre']] }[t];
-    $('#cNum').hidden = !ops; $('#cAno').hidden = t === 'personalizado'; $('#cIni').hidden = $('#cFim').hidden = t !== 'personalizado';
+    $('#cNum').hidden = !ops; $('#cAno').hidden = t === 'personalizado' || t === 'dia'; $('#cIni').hidden = $('#cFim').hidden = t !== 'personalizado'; $('#cDia').hidden = t !== 'dia';
     if (ops) {
       $('#cNum').firstChild.textContent = { mes: 'Mês', trimestre: 'Trimestre', semestre: 'Semestre' }[t];
       const atual = { mes: ma, trimestre: Math.ceil(ma / 3), semestre: Math.ceil(ma / 6) }[t];
@@ -733,7 +739,13 @@ function telaRelatorios(params) {
     }
   };
   f.tipo.addEventListener('change', ajustarN); ajustarN();
-  f.ini.value = `${ya}-${pad(ma)}-01`; f.fim.value = hoje();
+  f.ini.value = `${ya}-${pad(ma)}-01`; f.fim.value = hoje(); f.dia.value = hoje();
+  // no relatório diário, trocar o dia já gera o relatório
+  const irDia = d => { if (d) { f.dia.value = d; gerarRelatorio(f); } };
+  $('#relDiaAnt').addEventListener('click', () => irDia(addDias(f.dia.value || hoje(), -1)));
+  $('#relDiaProx').addEventListener('click', () => irDia(addDias(f.dia.value || hoje(), 1)));
+  $('#relDiaHoje').addEventListener('click', () => irDia(hoje()));
+  f.dia.addEventListener('change', () => irDia(f.dia.value));
   f.addEventListener('submit', e => { e.preventDefault(); gerarRelatorio(f); });
   $('#btnImprimir').addEventListener('click', () => window.print());
   $('#btnCsv').addEventListener('click', () => baixarCsv());
@@ -742,7 +754,7 @@ function telaRelatorios(params) {
 
 let ULTIMO = null;
 async function gerarRelatorio(f) {
-  const p = periodo(f.tipo.value, f.ano.value, f.n.value, f.ini.value, f.fim.value);
+  const p = f.tipo.value === 'dia' ? periodo('dia', 0, 0, f.dia.value) : periodo(f.tipo.value, f.ano.value, f.n.value, f.ini.value, f.fim.value);
   if (!p.ini || !p.fim || p.ini > p.fim) return toast('Período inválido.', true);
   const func = f.func ? f.func.value || null : null;
   const nomeFunc = func ? (S.perfis.find(x => x.id === func)?.nome || '') : (ehSup() ? 'TODA A EQUIPE' : S.perfil.nome);
