@@ -599,7 +599,7 @@ async function telaBuscar(params = {}) {
   box.innerHTML = '<p class="carregando">Buscando…</p>';
   const LIM = 500;
   let q = sb.from('lancamentos').select('*');
-  if (P.q) q = q.or(`id_parcelamento.ilike."*${P.q}*",origem.ilike."*${P.q}*"`);
+  if (P.q) q = q.or(`id_parcelamento.ilike.*${P.q}*,origem.ilike.*${P.q}*`)   // P.q já validado: só [0-9A-Za-z./-];
   if (P.ini) q = q.gte('data_contato', P.ini);
   if (P.fim) q = q.lte('data_contato', P.fim);
   if (P.setor) q = q.eq('setor', P.setor);
