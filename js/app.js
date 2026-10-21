@@ -143,6 +143,15 @@ async function carregarTabelas() {
 }
 
 $('#btnSair').addEventListener('click', () => sb.auth.signOut());
+// busca rápida no topo: leva para a aba Buscar já com o termo
+$('#buscaRapida').addEventListener('submit', e => {
+  e.preventDefault();
+  const t = e.target.q.value.trim().replace(/\s+/g, '');
+  if (!t) { location.hash = '#/buscar'; return; }
+  if (!RE_ID.test(t)) return toast('Busca: use só números/letras (Id do parcelamento ou origem), sem espaços.', true);
+  e.target.q.value = '';
+  location.hash = `#/buscar?q=${encodeURIComponent(t)}`;
+});
 
 // ---------------------------------------------------------------- tema claro/escuro
 const TEMAS = [['auto', '◐', 'automático (segue o computador)'], ['light', '☀', 'claro'], ['dark', '☾', 'escuro']];
@@ -280,7 +289,7 @@ function rotear() {
   const { rota, params } = parseHash();
   $$('#menu a').forEach(a => a.classList.toggle('ativo', a.dataset.rota === rota));
   destruirGraficos();
-  const telas = { lancar: telaLancar, pendentes: telaPendentes, relatorios: telaRelatorios, cancelamentos: telaCancelamentos, admin: telaAdmin, conta: telaConta };
+  const telas = { lancar: telaLancar, pendentes: telaPendentes, buscar: telaBuscar, relatorios: telaRelatorios, cancelamentos: telaCancelamentos, admin: telaAdmin, conta: telaConta };
   (telas[rota] || telaLancar)(params);
   app().focus({ preventScroll: true });
 }
@@ -439,7 +448,8 @@ function editar(l) {
   f.data_pagamento.value = l.data_pagamento || '';
   f.meio_acordo.disabled = !aceitaMeio(l.situacao);
   f._wppConferido = null;
-  $('#tituloForm').textContent = `Editando lançamento – Id ${l.id_parcelamento}`;
+  const dono = l.funcionario_id !== S.user.id ? ` (lançamento de ${S.perfis.find(p => p.id === l.funcionario_id)?.nome || 'outro funcionário'})` : '';
+  $('#tituloForm').textContent = `Editando lançamento – Id ${l.id_parcelamento}${dono}`;
   $('#btnSalvar').textContent = 'Salvar alterações';
   $('#avisoDup').innerHTML = '';
   f.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -545,6 +555,103 @@ async function telaPendentes(params = {}) {
       quadro('Boletos vencidos sem conferência — equipe', bol, 'boleto_vencimento', 'Boletos a conferir', 'Vencimento', 'Ver todos os boletos vencidos da equipe', 'Nenhum boleto vencido aguardando conferência na equipe. 👍') +
       quadro('Agendamentos vencidos sem atualização — equipe', agd, 'agendamento', 'Agendamentos a conferir', 'Agendamento', 'Ver todos os agendamentos vencidos da equipe', 'Nenhum agendamento vencido aguardando atualização na equipe. 👍');
   }
+}
+
+// ---------------------------------------------------------------- BUSCAR
+async function telaBuscar(params = {}) {
+  const sup = ehSup();
+  const P = { q: (params.q || '').trim(), ini: params.ini || '', fim: params.fim || '', setor: params.setor || '', sit: params.sit || '', func: params.func || '' };
+  const optSit = '<option value="">Todas</option><option value="__sem">(sem situação)</option>' + CATEGORIAS.slice(0, 4).map(cat => {
+    const itens = S.situacoes.filter(s => s.categoria === cat);
+    return itens.length ? `<optgroup label="${esc(catNome(cat))}">${itens.map(s => `<option value="${esc(s.codigo)}" ${s.codigo === P.sit ? 'selected' : ''}>${esc(s.codigo)}${s.ativo ? '' : ' (desativada)'}</option>`).join('')}</optgroup>` : '';
+  }).join('');
+  app().innerHTML = `
+  <div class="cab"><div><h1>Buscar</h1><p class="sub">Localize lançamentos pelo Id do parcelamento ou pela origem/inscrição (pode ser só parte do número), sem precisar percorrer os dias.${sup ? '' : ' Você encontra apenas os seus lançamentos.'}</p></div></div>
+  <form class="card" id="fBusca" autocomplete="off"><div class="linha">
+    <label class="campo" style="flex:2;min-width:220px">Id do parcelamento ou origem<input type="search" name="q" maxlength="30" inputmode="numeric" placeholder="ex.: 103800 ou 1038" value="${esc(P.q)}"></label>
+    <label class="campo">Contato de<input type="date" name="ini" value="${esc(P.ini)}"></label>
+    <label class="campo">até<input type="date" name="fim" value="${esc(P.fim)}"></label>
+    <label class="campo">Setor<select name="setor"><option value="">Todos</option>${S.setores.map(s => `<option ${s.nome === P.setor ? 'selected' : ''}>${esc(s.nome)}</option>`).join('')}</select></label>
+    <label class="campo">Situação<select name="sit">${optSit}</select></label>
+    ${sup ? `<label class="campo">Funcionário<select name="func"><option value="">Toda a equipe</option>${S.perfis.map(p => `<option value="${p.id}" ${p.id === P.func ? 'selected' : ''}>${esc(p.nome)}${p.ativo ? '' : ' (inativo)'}</option>`).join('')}</select></label>` : ''}
+    <button class="btn prim" type="submit">Buscar</button><button class="btn" type="button" id="btnLimparBusca">Limpar</button>
+  </div></form>
+  <div id="resBusca"></div>`;
+  if (P.sit === '__sem') $('#fBusca').sit.value = '__sem';
+  const f = $('#fBusca');
+  f.addEventListener('submit', e => {
+    e.preventDefault();
+    const q = f.q.value.trim().replace(/\s+/g, '');
+    if (q && !RE_ID.test(q)) { f.q.focus(); return toast('Use só números/letras (Id do parcelamento ou origem), sem espaços.', true); }
+    if (f.ini.value && f.fim.value && f.ini.value > f.fim.value) return toast('Período inválido.', true);
+    const u = new URLSearchParams();
+    if (q) u.set('q', q); for (const k of ['ini', 'fim', 'setor', 'sit']) if (f[k].value) u.set(k, f[k].value);
+    if (f.func && f.func.value) u.set('func', f.func.value);
+    const h = '#/buscar' + (u.toString() ? '?' + u : '');
+    if (location.hash === h) telaBuscar(Object.fromEntries(u)); else location.hash = h;
+  });
+  $('#btnLimparBusca').addEventListener('click', () => { location.hash = '#/buscar'; });
+
+  const box = $('#resBusca');
+  const temFiltro = P.q || P.ini || P.fim || P.setor || P.sit || P.func;
+  if (!temFiltro) { box.innerHTML = '<div class="card"><p class="vazio">Digite um Id do parcelamento ou uma origem — ou escolha um filtro — e clique em Buscar.</p></div>'; f.q.focus(); return; }
+  if (P.q && !RE_ID.test(P.q)) { box.innerHTML = '<div class="card aviso erro">Termo de busca inválido: use só números/letras, sem espaços.</div>'; return; }
+  box.innerHTML = '<p class="carregando">Buscando…</p>';
+  const LIM = 500;
+  let q = sb.from('lancamentos').select('*');
+  if (P.q) q = q.or(`id_parcelamento.ilike."*${P.q}*",origem.ilike."*${P.q}*"`);
+  if (P.ini) q = q.gte('data_contato', P.ini);
+  if (P.fim) q = q.lte('data_contato', P.fim);
+  if (P.setor) q = q.eq('setor', P.setor);
+  if (P.sit === '__sem') q = q.is('situacao', null); else if (P.sit) q = q.eq('situacao', P.sit);
+  if (!sup) q = q.eq('funcionario_id', S.user.id); else if (P.func) q = q.eq('funcionario_id', P.func);
+  const { data, error } = await q.order('id_parcelamento').order('data_contato', { ascending: false }).order('id', { ascending: false }).limit(LIM + 1);
+  if (error) { box.innerHTML = `<div class="card aviso erro">${esc(msgErro(error))}</div>`; return; }
+  let rows = data || []; const mais = rows.length > LIM; rows = rows.slice(0, LIM);
+  if (!rows.length) { box.innerHTML = `<div class="card"><p class="vazio">Nenhum lançamento encontrado${P.q ? ` para "${esc(P.q)}"` : ''}.${sup ? '' : ' Lembre-se: a busca mostra só os seus lançamentos.'}</p></div>`; return; }
+
+  // exatos primeiro (Id ou origem idênticos ao termo), depois o restante
+  const exato = r => P.q && (String(r.id_parcelamento).toLowerCase() === P.q.toLowerCase() || String(r.origem || '').toLowerCase() === P.q.toLowerCase());
+  const grupos = new Map();
+  for (const r of rows) { const k = r.id_parcelamento; if (!grupos.has(k)) grupos.set(k, []); grupos.get(k).push(r); }
+  for (const rs of grupos.values()) rs.sort((a, b) => String(b.data_contato).localeCompare(String(a.data_contato)) || b.id - a.id);
+  const lista = [...grupos.entries()].sort((a, b) => (exato(b[1][0]) - exato(a[1][0])) || String(a[0]).localeCompare(String(b[0]), 'pt-BR', { numeric: true }));
+  const nomes = Object.fromEntries(S.perfis.map(p => [p.id, p.nome]));
+  const podeEditar = r => r.funcionario_id === S.user.id || ehAdmin();
+  const realce = t => { const v = esc(t ?? ''); if (!P.q) return v; const i = String(t ?? '').toLowerCase().indexOf(P.q.toLowerCase()); return i < 0 ? v : esc(String(t).slice(0, i)) + '<mark>' + esc(String(t).slice(i, i + P.q.length)) + '</mark>' + esc(String(t).slice(i + P.q.length)); };
+  const acoesTxt = r => [r.whatsapp && `WhatsApp: ${r.whatsapp}`, r.sms && `SMS: ${r.sms}`, r.ligacao && `Ligação: ${r.ligacao}`, r.agendamento && `Agend.: ${fmtData(r.agendamento)}`].filter(Boolean).map(esc).join('<br>');
+  const colsN = sup ? 9 : 8;
+  const linha = r => `<tr data-id="${r.id}" class="${statusVenc(r) === 'conferir' || statusAgend(r) === 'conferir' ? 'linha-alerta' : ''}">
+      <td>${fmtData(r.data_contato)}<div class="dica">${diaSemana(r.data_contato).slice(0, 3)}</div></td>
+      <td><strong>${realce(r.id_parcelamento)}</strong>${r.origem ? `<div class="dica">Origem ${realce(r.origem)}</div>` : ''}</td>
+      <td>${esc(r.setor || '')}</td><td class="dica">${acoesTxt(r)}${tagAgend(r)}</td>
+      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagCanc(r)}</td>
+      <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) : ''}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${r.valor_boleto != null ? `<div class="dica">${BRL.format(r.valor_boleto)}</div>` : ''}${tagVenc(r)}</td>
+      <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : ''}${r.data_pagamento ? `<div class="dica">pago em ${fmtData(r.data_pagamento)}</div>` : ''}</td>
+      ${sup ? `<td>${esc(nomes[r.funcionario_id] || '—')}</td>` : ''}
+      <td><div class="acoes"><button class="btn peq" type="button" data-det="${r.id}" aria-expanded="false">Detalhes</button>${podeEditar(r) ? `<a class="btn peq prim" href="#/lancar?data=${r.data_contato}&editar=${r.id}">Editar</a>` : ''}</div></td></tr>`;
+  const det = r => {
+    const c = (rot, v) => (v == null || v === '' ? '' : `<div><span class="dica">${rot}</span><div>${v}</div></div>`);
+    return `<tr class="linha-detalhe" data-det-de="${r.id}"><td colspan="${colsN}"><div class="detalhe-grade">
+      ${c('Fonte do contato', esc(r.fonte_contato))}${c('WhatsApp', esc(r.whatsapp))}${c('SMS', esc(r.sms))}${c('Ligação', esc(r.ligacao))}${c('Agendamento', fmtData(r.agendamento))}
+      ${c('Boleto emitido em', fmtData(r.boleto_emitido))}${c('Vencimento', fmtData(r.boleto_vencimento))}${c('Nº de parcelas', r.parcelas)}${c('Valor do boleto', r.valor_boleto != null ? BRL.format(r.valor_boleto) : '')}
+      ${c('Situação', esc(r.situacao || '(sem situação)'))}${c('Valor pago', r.valor_pago != null ? BRL.format(r.valor_pago) : '')}${c('Data do pagamento', fmtData(r.data_pagamento))}${c('Meio que gerou o acordo', esc(r.meio_acordo))}
+      ${c('Cancelamento', r.cancelamento_status ? esc(cancNome(r.cancelamento_status)) : '')}${c('Retorno do setor', esc(r.cancelamento_obs))}
+      ${c('Funcionário', esc(nomes[r.funcionario_id] || (r.funcionario_id === S.user.id ? S.perfil.nome : '—')))}${c('Criado em', r.criado_em ? new Date(r.criado_em).toLocaleString('pt-BR') : '')}${c('Última alteração', r.atualizado_em ? new Date(r.atualizado_em).toLocaleString('pt-BR') : '')}
+      </div>${r.observacoes ? `<div class="detalhe-obs"><span class="dica">Observações</span><div>${esc(r.observacoes)}</div></div>` : ''}
+      ${!podeEditar(r) ? '<p class="dica">Somente consulta: lançamentos de outros funcionários são alterados por eles ou pelo administrador.</p>' : ''}</td></tr>`;
+  };
+  box.innerHTML = `<div class="card"><div class="cab"><h2>Resultado</h2><span class="dica">${NUM.format(rows.length)} lançamento(s) em ${NUM.format(grupos.size)} parcelamento(s)</span></div>
+    ${mais ? `<div class="aviso atencao">Mostrando os ${LIM} primeiros resultados. Refine a busca (mais dígitos, período ou filtros).</div>` : ''}
+    <div class="tabela-wrap"><table class="tab-busca"><thead><tr><th>Data do contato</th><th>Id parc.</th><th>Setor</th><th>Ações</th><th>Situação</th><th>Boleto</th><th class="num">Pago</th>${sup ? '<th>Funcionário</th>' : ''}<th></th></tr></thead><tbody>
+    ${lista.map(([id, rs]) => (rs.length > 1 ? `<tr class="linha-grupo"><td colspan="${colsN}">Parcelamento <strong>${realce(id)}</strong> — histórico com ${rs.length} lançamentos (mais recente primeiro)</td></tr>` : '') + rs.map(linha).join('')).join('')}
+    </tbody></table></div></div>`;
+  box.querySelectorAll('[data-det]').forEach(b => b.addEventListener('click', () => {
+    const tr = b.closest('tr'); const aberto = tr.nextElementSibling && tr.nextElementSibling.dataset.detDe === b.dataset.det;
+    if (aberto) { tr.nextElementSibling.remove(); b.setAttribute('aria-expanded', 'false'); b.textContent = 'Detalhes'; return; }
+    tr.insertAdjacentHTML('afterend', det(rows.find(r => String(r.id) === b.dataset.det)));
+    b.setAttribute('aria-expanded', 'true'); b.textContent = 'Fechar';
+  }));
 }
 
 // ---------------------------------------------------------------- RELATÓRIOS

@@ -235,3 +235,17 @@ tr.linha-alerta td { background: color-mix(in srgb, var(--bad-soft) 70%, transpa
 .check-linha { display: inline-flex; align-items: center; gap: .4rem; margin: .2rem 0 .6rem; font-size: .9rem; cursor: pointer; }
 .acoes-linha { white-space: nowrap; }
 .acoes-linha .btn + .btn { margin-left: .3rem; }
+
+/* busca */
+.busca-rapida input { width: 13rem; max-width: 100%; padding: .38rem .65rem; border-radius: 8px; border: 1px solid rgba(255,255,255,.35); background: rgba(255,255,255,.14); color: var(--primary-ink); font: inherit; font-size: .88rem; }
+.busca-rapida input::placeholder { color: var(--primary-ink); opacity: .75; }
+.busca-rapida input:focus { outline: 2px solid rgba(255,255,255,.7); outline-offset: 1px; background: rgba(255,255,255,.22); }
+tr.linha-grupo td { background: var(--surface-2, rgba(127,127,127,.08)); font-size: .85rem; padding-top: .55rem; }
+tr.linha-detalhe td { background: rgba(127,127,127,.06); }
+.detalhe-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: .55rem 1rem; font-size: .88rem; }
+.detalhe-obs { margin-top: .6rem; font-size: .88rem; white-space: pre-wrap; }
+mark { background: color-mix(in srgb, var(--warn-soft) 80%, transparent); color: inherit; padding: 0 .1rem; border-radius: 3px; }
+@media (max-width: 720px) {
+  .busca-rapida { order: 2; flex: 1 1 8rem; }
+  .busca-rapida input { width: 100%; }
+}
