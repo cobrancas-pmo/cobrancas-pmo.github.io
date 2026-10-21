@@ -560,24 +560,25 @@ async function telaPendentes(params = {}) {
 // ---------------------------------------------------------------- BUSCAR
 async function telaBuscar(params = {}) {
   const sup = ehSup();
-  const P = { q: (params.q || '').trim(), ini: params.ini || '', fim: params.fim || '', setor: params.setor || '', sit: params.sit || '', func: params.func || '' };
-  const optSit = '<option value="">Todas</option><option value="__sem">(sem situação)</option>' + CATEGORIAS.slice(0, 4).map(cat => {
+  const P = { q: (params.q || '').trim(), ini: params.ini || '', fim: params.fim || '', setor: params.setor || '', sit: params.sit || '',
+              func: params.func || '', st: ['pend', 'fin'].includes(params.st) ? params.st : '' };
+  const optSit = `<option value="">Todas</option><option value="__sem" ${P.sit === '__sem' ? 'selected' : ''}>(sem situação)</option>` + CATEGORIAS.slice(0, 4).map(cat => {
     const itens = S.situacoes.filter(s => s.categoria === cat);
     return itens.length ? `<optgroup label="${esc(catNome(cat))}">${itens.map(s => `<option value="${esc(s.codigo)}" ${s.codigo === P.sit ? 'selected' : ''}>${esc(s.codigo)}${s.ativo ? '' : ' (desativada)'}</option>`).join('')}</optgroup>` : '';
   }).join('');
   app().innerHTML = `
-  <div class="cab"><div><h1>Buscar</h1><p class="sub">Localize lançamentos pelo Id do parcelamento ou pela origem/inscrição (pode ser só parte do número), sem precisar percorrer os dias.${sup ? '' : ' Você encontra apenas os seus lançamentos.'}</p></div></div>
+  <div class="cab"><div><h1>Buscar</h1><p class="sub">${sup ? 'Todos os lançamentos do sistema' : 'Todos os seus lançamentos'}, do mais recente para o mais antigo. Digite um Id do parcelamento ou origem (pode ser parte do número) ou use os filtros.</p></div></div>
   <form class="card" id="fBusca" autocomplete="off"><div class="linha">
-    <label class="campo" style="flex:2;min-width:220px">Id do parcelamento ou origem<input type="search" name="q" maxlength="30" inputmode="numeric" placeholder="ex.: 103800 ou 1038" value="${esc(P.q)}"></label>
+    <label class="campo" style="flex:2;min-width:200px">Id do parcelamento ou origem<input type="search" name="q" maxlength="30" inputmode="numeric" placeholder="ex.: 103800 ou 1038" value="${esc(P.q)}"></label>
+    ${sup ? `<label class="campo">Atendente<select name="func"><option value="">Todos os atendentes</option>${S.perfis.map(p => `<option value="${p.id}" ${p.id === P.func ? 'selected' : ''}>${esc(p.nome)}${p.ativo ? '' : ' (inativo)'}</option>`).join('')}</select></label>` : ''}
+    <label class="campo">Andamento<select name="st"><option value="">Todos</option><option value="pend" ${P.st === 'pend' ? 'selected' : ''}>Só pendentes (em andamento / sem situação)</option><option value="fin" ${P.st === 'fin' ? 'selected' : ''}>Só finalizados</option></select></label>
     <label class="campo">Contato de<input type="date" name="ini" value="${esc(P.ini)}"></label>
     <label class="campo">até<input type="date" name="fim" value="${esc(P.fim)}"></label>
     <label class="campo">Setor<select name="setor"><option value="">Todos</option>${S.setores.map(s => `<option ${s.nome === P.setor ? 'selected' : ''}>${esc(s.nome)}</option>`).join('')}</select></label>
     <label class="campo">Situação<select name="sit">${optSit}</select></label>
-    ${sup ? `<label class="campo">Funcionário<select name="func"><option value="">Toda a equipe</option>${S.perfis.map(p => `<option value="${p.id}" ${p.id === P.func ? 'selected' : ''}>${esc(p.nome)}${p.ativo ? '' : ' (inativo)'}</option>`).join('')}</select></label>` : ''}
     <button class="btn prim" type="submit">Buscar</button><button class="btn" type="button" id="btnLimparBusca">Limpar</button>
   </div></form>
-  <div id="resBusca"></div>`;
-  if (P.sit === '__sem') $('#fBusca').sit.value = '__sem';
+  <div id="resBusca"><p class="carregando">Carregando…</p></div>`;
   const f = $('#fBusca');
   f.addEventListener('submit', e => {
     e.preventDefault();
@@ -585,47 +586,47 @@ async function telaBuscar(params = {}) {
     if (q && !RE_ID.test(q)) { f.q.focus(); return toast('Use só números/letras (Id do parcelamento ou origem), sem espaços.', true); }
     if (f.ini.value && f.fim.value && f.ini.value > f.fim.value) return toast('Período inválido.', true);
     const u = new URLSearchParams();
-    if (q) u.set('q', q); for (const k of ['ini', 'fim', 'setor', 'sit']) if (f[k].value) u.set(k, f[k].value);
+    if (q) u.set('q', q); for (const k of ['st', 'ini', 'fim', 'setor', 'sit']) if (f[k].value) u.set(k, f[k].value);
     if (f.func && f.func.value) u.set('func', f.func.value);
     const h = '#/buscar' + (u.toString() ? '?' + u : '');
     if (location.hash === h) telaBuscar(Object.fromEntries(u)); else location.hash = h;
   });
+  for (const nm of ['func', 'st', 'setor', 'sit']) if (f[nm]) f[nm].addEventListener('change', () => f.requestSubmit());
   $('#btnLimparBusca').addEventListener('click', () => { location.hash = '#/buscar'; });
 
   const box = $('#resBusca');
-  const temFiltro = P.q || P.ini || P.fim || P.setor || P.sit || P.func;
-  if (!temFiltro) { box.innerHTML = '<div class="card"><p class="vazio">Digite um Id do parcelamento ou uma origem — ou escolha um filtro — e clique em Buscar.</p></div>'; f.q.focus(); return; }
   if (P.q && !RE_ID.test(P.q)) { box.innerHTML = '<div class="card aviso erro">Termo de busca inválido: use só números/letras, sem espaços.</div>'; return; }
-  box.innerHTML = '<p class="carregando">Buscando…</p>';
-  const LIM = 500;
-  let q = sb.from('lancamentos').select('*');
-  if (P.q) q = q.or(`id_parcelamento.ilike.*${P.q}*,origem.ilike.*${P.q}*`)   // P.q já validado: só [0-9A-Za-z./-];
-  if (P.ini) q = q.gte('data_contato', P.ini);
-  if (P.fim) q = q.lte('data_contato', P.fim);
-  if (P.setor) q = q.eq('setor', P.setor);
-  if (P.sit === '__sem') q = q.is('situacao', null); else if (P.sit) q = q.eq('situacao', P.sit);
-  if (!sup) q = q.eq('funcionario_id', S.user.id); else if (P.func) q = q.eq('funcionario_id', P.func);
-  const { data, error } = await q.order('id_parcelamento').order('data_contato', { ascending: false }).order('id', { ascending: false }).limit(LIM + 1);
-  if (error) { box.innerHTML = `<div class="card aviso erro">${esc(msgErro(error))}</div>`; return; }
-  let rows = data || []; const mais = rows.length > LIM; rows = rows.slice(0, LIM);
-  if (!rows.length) { box.innerHTML = `<div class="card"><p class="vazio">Nenhum lançamento encontrado${P.q ? ` para "${esc(P.q)}"` : ''}.${sup ? '' : ' Lembre-se: a busca mostra só os seus lançamentos.'}</p></div>`; return; }
 
-  // exatos primeiro (Id ou origem idênticos ao termo), depois o restante
-  const exato = r => P.q && (String(r.id_parcelamento).toLowerCase() === P.q.toLowerCase() || String(r.origem || '').toLowerCase() === P.q.toLowerCase());
-  const grupos = new Map();
-  for (const r of rows) { const k = r.id_parcelamento; if (!grupos.has(k)) grupos.set(k, []); grupos.get(k).push(r); }
-  for (const rs of grupos.values()) rs.sort((a, b) => String(b.data_contato).localeCompare(String(a.data_contato)) || b.id - a.id);
-  const lista = [...grupos.entries()].sort((a, b) => (exato(b[1][0]) - exato(a[1][0])) || String(a[0]).localeCompare(String(b[0]), 'pt-BR', { numeric: true }));
+  // pendente = ainda não finalizado: sem situação ou situação da categoria "Em andamento"
+  const codsPend = S.situacoes.filter(s => s.categoria === 'Em andamento').map(s => s.codigo);
+  const lst = codsPend.map(c => `"${c.replace(/"/g, '')}"`).join(',');
+  const ehPend = r => !r.situacao || codsPend.includes(r.situacao);
+  const termo = P.q ? `or(id_parcelamento.ilike.*${P.q}*,origem.ilike.*${P.q}*)` : '';   // P.q já validado: só [0-9A-Za-z./-]
+  const pendExpr = `or(situacao.is.null${lst ? `,situacao.in.(${lst})` : ''})`;
+  const montar = (q, st) => {
+    // termo e "só pendentes" são duas condições OU; combinadas num único filtro and(...)
+    if (st === 'pend') q = q.or(termo ? `and(${termo},${pendExpr})` : pendExpr.slice(3, -1));
+    else if (termo) q = q.or(termo.slice(3, -1));
+    if (st === 'fin') { q = q.not('situacao', 'is', null); if (lst) q = q.not('situacao', 'in', `(${lst})`); }
+    if (P.ini) q = q.gte('data_contato', P.ini);
+    if (P.fim) q = q.lte('data_contato', P.fim);
+    if (P.setor) q = q.eq('setor', P.setor);
+    if (P.sit === '__sem') q = q.is('situacao', null); else if (P.sit) q = q.eq('situacao', P.sit);
+    if (!sup) q = q.eq('funcionario_id', S.user.id); else if (P.func) q = q.eq('funcionario_id', P.func);
+    return q;
+  };
+  const PAG = 200;
+  let carregados = [];
   const nomes = Object.fromEntries(S.perfis.map(p => [p.id, p.nome]));
   const podeEditar = r => r.funcionario_id === S.user.id || ehAdmin();
   const realce = t => { const v = esc(t ?? ''); if (!P.q) return v; const i = String(t ?? '').toLowerCase().indexOf(P.q.toLowerCase()); return i < 0 ? v : esc(String(t).slice(0, i)) + '<mark>' + esc(String(t).slice(i, i + P.q.length)) + '</mark>' + esc(String(t).slice(i + P.q.length)); };
   const acoesTxt = r => [r.whatsapp && `WhatsApp: ${r.whatsapp}`, r.sms && `SMS: ${r.sms}`, r.ligacao && `Ligação: ${r.ligacao}`, r.agendamento && `Agend.: ${fmtData(r.agendamento)}`].filter(Boolean).map(esc).join('<br>');
   const colsN = sup ? 9 : 8;
-  const linha = r => `<tr data-id="${r.id}" class="${statusVenc(r) === 'conferir' || statusAgend(r) === 'conferir' ? 'linha-alerta' : ''}">
+  const linha = r => `<tr data-id="${r.id}" class="${ehPend(r) ? 'linha-pendente' : ''} ${statusVenc(r) === 'conferir' || statusAgend(r) === 'conferir' ? 'linha-alerta' : ''}">
       <td>${fmtData(r.data_contato)}<div class="dica">${diaSemana(r.data_contato).slice(0, 3)}</div></td>
       <td><strong>${realce(r.id_parcelamento)}</strong>${r.origem ? `<div class="dica">Origem ${realce(r.origem)}</div>` : ''}</td>
       <td>${esc(r.setor || '')}</td><td class="dica">${acoesTxt(r)}${tagAgend(r)}</td>
-      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagCanc(r)}</td>
+      <td>${ehPend(r) ? '<span class="tag pendente">⏳ Pendente</span> ' : ''}${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagCanc(r)}</td>
       <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) : ''}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${r.valor_boleto != null ? `<div class="dica">${BRL.format(r.valor_boleto)}</div>` : ''}${tagVenc(r)}</td>
       <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : ''}${r.data_pagamento ? `<div class="dica">pago em ${fmtData(r.data_pagamento)}</div>` : ''}</td>
       ${sup ? `<td>${esc(nomes[r.funcionario_id] || '—')}</td>` : ''}
@@ -637,21 +638,60 @@ async function telaBuscar(params = {}) {
       ${c('Boleto emitido em', fmtData(r.boleto_emitido))}${c('Vencimento', fmtData(r.boleto_vencimento))}${c('Nº de parcelas', r.parcelas)}${c('Valor do boleto', r.valor_boleto != null ? BRL.format(r.valor_boleto) : '')}
       ${c('Situação', esc(r.situacao || '(sem situação)'))}${c('Valor pago', r.valor_pago != null ? BRL.format(r.valor_pago) : '')}${c('Data do pagamento', fmtData(r.data_pagamento))}${c('Meio que gerou o acordo', esc(r.meio_acordo))}
       ${c('Cancelamento', r.cancelamento_status ? esc(cancNome(r.cancelamento_status)) : '')}${c('Retorno do setor', esc(r.cancelamento_obs))}
-      ${c('Funcionário', esc(nomes[r.funcionario_id] || (r.funcionario_id === S.user.id ? S.perfil.nome : '—')))}${c('Criado em', r.criado_em ? new Date(r.criado_em).toLocaleString('pt-BR') : '')}${c('Última alteração', r.atualizado_em ? new Date(r.atualizado_em).toLocaleString('pt-BR') : '')}
+      ${c('Atendente', esc(nomes[r.funcionario_id] || (r.funcionario_id === S.user.id ? S.perfil.nome : '—')))}${c('Criado em', r.criado_em ? new Date(r.criado_em).toLocaleString('pt-BR') : '')}${c('Última alteração', r.atualizado_em ? new Date(r.atualizado_em).toLocaleString('pt-BR') : '')}
       </div>${r.observacoes ? `<div class="detalhe-obs"><span class="dica">Observações</span><div>${esc(r.observacoes)}</div></div>` : ''}
-      ${!podeEditar(r) ? '<p class="dica">Somente consulta: lançamentos de outros funcionários são alterados por eles ou pelo administrador.</p>' : ''}</td></tr>`;
+      ${!podeEditar(r) ? '<p class="dica">Somente consulta: lançamentos de outros atendentes são alterados por eles ou pelo administrador.</p>' : ''}</td></tr>`;
   };
-  box.innerHTML = `<div class="card"><div class="cab"><h2>Resultado</h2><span class="dica">${NUM.format(rows.length)} lançamento(s) em ${NUM.format(grupos.size)} parcelamento(s)</span></div>
-    ${mais ? `<div class="aviso atencao">Mostrando os ${LIM} primeiros resultados. Refine a busca (mais dígitos, período ou filtros).</div>` : ''}
-    <div class="tabela-wrap"><table class="tab-busca"><thead><tr><th>Data do contato</th><th>Id parc.</th><th>Setor</th><th>Ações</th><th>Situação</th><th>Boleto</th><th class="num">Pago</th>${sup ? '<th>Funcionário</th>' : ''}<th></th></tr></thead><tbody>
-    ${lista.map(([id, rs]) => (rs.length > 1 ? `<tr class="linha-grupo"><td colspan="${colsN}">Parcelamento <strong>${realce(id)}</strong> — histórico com ${rs.length} lançamentos (mais recente primeiro)</td></tr>` : '') + rs.map(linha).join('')).join('')}
-    </tbody></table></div></div>`;
-  box.querySelectorAll('[data-det]').forEach(b => b.addEventListener('click', () => {
+  // com termo: agrupa por parcelamento (histórico); sem termo: lista simples, mais recentes primeiro
+  const corpo = rows => {
+    if (!P.q) return rows.map(linha).join('');
+    const exato = r => String(r.id_parcelamento).toLowerCase() === P.q.toLowerCase() || String(r.origem || '').toLowerCase() === P.q.toLowerCase();
+    const grupos = new Map();
+    for (const r of rows) { if (!grupos.has(r.id_parcelamento)) grupos.set(r.id_parcelamento, []); grupos.get(r.id_parcelamento).push(r); }
+    for (const rs of grupos.values()) rs.sort((a, b) => String(b.data_contato).localeCompare(String(a.data_contato)) || b.id - a.id);
+    return [...grupos.entries()].sort((a, b) => (exato(b[1][0]) - exato(a[1][0])) || String(a[0]).localeCompare(String(b[0]), 'pt-BR', { numeric: true }))
+      .map(([id, rs]) => (rs.length > 1 ? `<tr class="linha-grupo"><td colspan="${colsN}">Parcelamento <strong>${realce(id)}</strong> — histórico com ${rs.length} lançamentos (mais recente primeiro)</td></tr>` : '') + rs.map(linha).join('')).join('');
+  };
+
+  const ordenar = q => (P.q ? q.order('id_parcelamento').order('data_contato', { ascending: false }) : q.order('data_contato', { ascending: false })).order('id', { ascending: false });
+  const [res, cPend] = await Promise.all([
+    ordenar(montar(sb.from('lancamentos').select('*', { count: 'exact' }), P.st)).range(0, PAG - 1),
+    P.st === 'fin' ? Promise.resolve({ count: 0 }) : montar(sb.from('lancamentos').select('id', { count: 'exact', head: true }), 'pend')
+  ]);
+  if (res.error) { box.innerHTML = `<div class="card aviso erro">${esc(msgErro(res.error))}</div>`; return; }
+  carregados = res.data || [];
+  const total = res.count ?? carregados.length;
+  const nPend = P.st === 'fin' ? 0 : (cPend.count ?? carregados.filter(ehPend).length);
+  if (!carregados.length) { box.innerHTML = `<div class="card"><p class="vazio">Nenhum lançamento encontrado${P.q ? ` para "${esc(P.q)}"` : ''}.${sup ? '' : ' Lembre-se: aqui aparecem só os seus lançamentos.'}</p></div>`; return; }
+  const quem = sup ? (P.func ? esc(nomes[P.func] || '') : 'todos os atendentes') : 'seus lançamentos';
+  box.innerHTML = `<div class="card"><div class="cab"><h2>Resultado</h2><span class="dica">${quem}</span></div>
+    <div class="resumo-busca">
+      <span><strong>${NUM.format(total)}</strong> lançamento(s)</span>
+      ${P.st === 'fin' ? '' : `<a href="#" id="soPend" class="chip-pend" title="Mostrar só os pendentes"><span class="tag pendente">⏳ ${NUM.format(nPend)} pendente(s)</span></a>`}
+      <span class="dica">⏳ Pendente = ainda não finalizado (situação "em andamento" ou sem situação). Linhas em vermelho: boleto ou agendamento vencido para conferir.</span>
+    </div>
+    <div class="tabela-wrap"><table class="tab-busca"><thead><tr><th>Data do contato</th><th>Id parc.</th><th>Setor</th><th>Ações</th><th>Situação</th><th>Boleto</th><th class="num">Pago</th>${sup ? '<th>Atendente</th>' : ''}<th></th></tr></thead>
+    <tbody id="tbBusca">${corpo(carregados)}</tbody></table></div>
+    <div class="acoes" id="maisBusca" style="margin-top:.6rem"></div></div>`;
+  const ligarDetalhes = () => box.querySelectorAll('[data-det]:not([data-ok])').forEach(b => { b.dataset.ok = '1'; b.addEventListener('click', () => {
     const tr = b.closest('tr'); const aberto = tr.nextElementSibling && tr.nextElementSibling.dataset.detDe === b.dataset.det;
     if (aberto) { tr.nextElementSibling.remove(); b.setAttribute('aria-expanded', 'false'); b.textContent = 'Detalhes'; return; }
-    tr.insertAdjacentHTML('afterend', det(rows.find(r => String(r.id) === b.dataset.det)));
+    tr.insertAdjacentHTML('afterend', det(carregados.find(r => String(r.id) === b.dataset.det)));
     b.setAttribute('aria-expanded', 'true'); b.textContent = 'Fechar';
-  }));
+  }); });
+  const botaoMais = () => {
+    const m = $('#maisBusca'); if (!m) return;
+    m.innerHTML = carregados.length < total ? `<span class="dica">Mostrando ${NUM.format(carregados.length)} de ${NUM.format(total)}.</span> <button class="btn" type="button" id="btnMais">Carregar mais ${NUM.format(Math.min(PAG, total - carregados.length))}</button>` : (total > PAG ? `<span class="dica">Todos os ${NUM.format(total)} lançamentos carregados.</span>` : '');
+    const b = $('#btnMais'); if (b) b.addEventListener('click', async () => {
+      b.disabled = true; b.textContent = 'Carregando…';
+      const { data, error } = await ordenar(montar(sb.from('lancamentos').select('*'), P.st)).range(carregados.length, carregados.length + PAG - 1);
+      if (error) { b.disabled = false; return toast(msgErro(error), true); }
+      carregados = carregados.concat(data || []);
+      $('#tbBusca').innerHTML = corpo(carregados); ligarDetalhes(); botaoMais();
+    });
+  };
+  ligarDetalhes(); botaoMais();
+  const sp = $('#soPend'); if (sp) sp.addEventListener('click', e => { e.preventDefault(); f.st.value = 'pend'; f.requestSubmit(); });
 }
 
 // ---------------------------------------------------------------- RELATÓRIOS

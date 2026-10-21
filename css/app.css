@@ -249,3 +249,10 @@ mark { background: color-mix(in srgb, var(--warn-soft) 80%, transparent); color:
   .busca-rapida { order: 2; flex: 1 1 8rem; }
   .busca-rapida input { width: 100%; }
 }
+
+/* buscar: pendentes */
+.tag.pendente { background: var(--warn-soft); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
+tr.linha-pendente td:first-child { box-shadow: inset 4px 0 0 var(--warn); }
+.resumo-busca { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-bottom: .6rem; }
+.chip-pend { text-decoration: none; }
+.chip-pend .tag { font-size: .82rem; padding: .2rem .6rem; }
