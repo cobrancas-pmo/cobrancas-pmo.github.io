@@ -20,7 +20,7 @@ const CAT_LABEL = { 'Revogado': 'Sem sucesso' };
 const catNome = c => CAT_LABEL[c] || c;
 const OPC = {
   fonte: ['Cadastro', 'Localize', 'Assertiva', 'Informado pelo contribuinte'],
-  whatsapp: ['Enviado', 'Respondido', 'Sem WhatsApp'],
+  whatsapp: ['Enviado', 'Respondido', 'Não respondido', 'Sem WhatsApp'],
   sms: ['Enviado', 'Respondido'],
   ligacao: ['Atendida', 'Não atendida', 'Número errado'],
   meio_acordo: ['WhatsApp', 'SMS', 'Ligação', 'Atendimento presencial', 'Contribuinte procurou']
@@ -409,7 +409,7 @@ async function telaLancar(params) {
     if (cat === 'Pago' && o.valor_pago == null && !confirm('Situação "pago" sem valor informado. Salvar mesmo assim?')) return;
     if (cat !== 'Pago' && o.valor_pago != null && !confirm('Há valor pago, mas a situação não é de pagamento. Salvar mesmo assim?')) return;
     // o primeiro contato é sempre via WhatsApp: ajuda a manter o funil correto
-    if (!o.whatsapp && !confirm('O primeiro contato é sempre via WhatsApp, mas o campo WhatsApp está vazio.\n\nOK = salvar assim mesmo\nCancelar = voltar e informar (Enviado, Respondido ou Sem WhatsApp)')) { f.whatsapp.focus(); return; }
+    if (!o.whatsapp && !confirm('O primeiro contato é sempre via WhatsApp, mas o campo WhatsApp está vazio.\n\nOK = salvar assim mesmo\nCancelar = voltar e informar (Enviado, Respondido, Não respondido ou Sem WhatsApp)')) { f.whatsapp.focus(); return; }
     if (o.whatsapp === 'Enviado' && (cat === 'Pago' || o.boleto_emitido) && f._wppConferido !== (f.registro.value || 'novo')) {
       f._wppConferido = f.registro.value || 'novo';
       if (confirm('Houve acordo/pagamento, mas o WhatsApp está só como "Enviado".\nO contribuinte respondeu pelo WhatsApp?\n\nOK = sim, marcar como "Respondido"\nCancelar = não, manter "Enviado"')) { o.whatsapp = 'Respondido'; f.whatsapp.value = 'Respondido'; }
@@ -891,7 +891,7 @@ function htmlFunil(F, T) {
   if (R.wpp_nao_informado) avisos.push(`${NUM.format(R.wpp_nao_informado)} contato(s) sem o status do WhatsApp informado.`);
   if (R.pagos_so_enviado) avisos.push(`${NUM.format(R.pagos_so_enviado)} pagamento(s) com o WhatsApp só como "Enviado". Se o contribuinte respondeu, atualize para "Respondido" para a taxa de resposta ficar correta.`);
   const peq = n => (n < AMOSTRA_MIN ? ' <span class="dica" title="Poucos casos: resultado pouco confiável">*</span>' : '');
-  const statusRot = { 'Respondido': 'Respondeu', 'Enviado': 'Enviado, sem resposta', 'Sem WhatsApp': 'Sem WhatsApp', 'Não informado': 'Não informado' };
+  const statusRot = { 'Respondido': 'Respondeu', 'Enviado': 'Enviado (aguardando resposta)', 'Não respondido': 'Não respondeu', 'Sem WhatsApp': 'Sem WhatsApp', 'Não informado': 'Não informado' };
   const st2 = [...new Set(F.etapa2.map(x => x.status_wpp))];
   return `<div class="card"><h3 style="margin-top:0">Funil a partir do WhatsApp</h3>
     <p class="dica">O primeiro contato é sempre via WhatsApp (etapa 1). SMS, ligação e agendamento formam a 2ª etapa. "Resolvido no WhatsApp" = pago usando só o WhatsApp, ou com o meio do acordo informado como WhatsApp.</p>
