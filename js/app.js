@@ -84,6 +84,9 @@ const sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY, {
 const S = { user: null, perfil: null, situacoes: [], setores: [], perfis: [], charts: [], recuperando: false };
 const ehSup = () => S.perfil && ['supervisor', 'admin'].includes(S.perfil.papel);
 const ehAdmin = () => S.perfil && S.perfil.papel === 'admin';
+// atendente em nome de quem o Lançar trabalha (só o administrador pode escolher outro)
+const alvoLancar = () => (ehAdmin() && S.lancarComo) || S.user.id;
+const nomePerfil = id => (id === S.user.id ? S.perfil.nome : (S.perfis.find(p => p.id === id)?.nome || 'outro atendente'));
 const catDe = cod => (cod ? (S.situacoes.find(s => s.codigo === cod)?.categoria || 'Outros') : 'Sem situação');
 // "Meio que gerou o acordo" só faz sentido quando houve pagamento ou boleto/acordo em aberto
 const aceitaMeio = cod => catDe(cod) === 'Pago' || sitConfere(cod);
@@ -119,7 +122,7 @@ async function aposLogin(session) {
   if (aal && aal.nextLevel === 'aal2' && aal.currentLevel !== 'aal2') return telaDesafioMfa();
   const { data: perfil, error } = await sb.from('perfis').select('*').eq('id', S.user.id).maybeSingle();
   if (error) { app().innerHTML = `<div class="card aviso erro">${esc(msgErro(error))}</div>`; return; }
-  S.perfil = perfil;
+  S.perfil = perfil; S.lancarComo = null;
   if (!perfil || !perfil.ativo) return telaAguardando();
   await carregarTabelas();
   $('#topo').hidden = false;
@@ -307,10 +310,16 @@ function optSituacoes(sel) {
 
 async function telaLancar(params) {
   const dia = /^\d{4}-\d{2}-\d{2}$/.test(params.data || '') ? params.data : hoje();
+  if (ehAdmin() && params.editar) {   // ao abrir lançamento de outra pessoa, a tela passa a mostrar o dia dela
+    const { data: reg } = await sb.from('lancamentos').select('funcionario_id').eq('id', params.editar).maybeSingle();
+    if (reg) S.lancarComo = reg.funcionario_id === S.user.id ? null : reg.funcionario_id;
+  }
+  const alvo = alvoLancar(); const outro = alvo !== S.user.id;
   const setores = S.setores.filter(s => s.ativo).map(s => s.nome);
   app().innerHTML = `
   <div class="cab">
-    <div><h1>Lançamentos do dia</h1><p class="sub">Cada contribuinte contatado = uma linha. Quando a situação mudar, atualize a mesma linha.</p></div>
+    <div><h1>Lançamentos do dia</h1><p class="sub">Cada contribuinte contatado = uma linha. Quando a situação mudar, atualize a mesma linha.</p>
+      ${ehAdmin() ? `<label class="campo lancar-como">Atendente (lançar em nome de)<select id="lancarComo">${S.perfis.filter(p => p.ativo || p.id === alvo).map(p => `<option value="${p.id}" ${p.id === alvo ? 'selected' : ''}>${esc(p.nome)}${p.id === S.user.id ? ' (você)' : ''}</option>`).join('')}</select></label>` : ''}</div>
     <div class="barra-dia">
       <button class="btn" id="diaAnt" title="Dia anterior" aria-label="Dia anterior">‹</button>
       <input type="date" id="dia" value="${dia}" aria-label="Data do contato">
@@ -319,6 +328,7 @@ async function telaLancar(params) {
       <span class="dia-semana">${diaSemana(dia)}</span>
     </div>
   </div>
+  ${outro ? `<div class="aviso atencao aviso-como">Você está vendo e lançando em nome de <strong>${esc(nomePerfil(alvo))}</strong>. Os lançamentos novos contarão na produção dela(e); a auditoria registra que foram feitos por você. <a href="#" id="voltarMim">Voltar para os meus lançamentos</a></div>` : ''}
   <div class="kpis mini" id="resumoDia"></div>
   <form class="card" id="fLanc" novalidate autocomplete="off">
     <div class="cab"><h2 id="tituloForm">Novo lançamento</h2><span class="dica">Campos com * são obrigatórios</span></div>
@@ -363,6 +373,8 @@ async function telaLancar(params) {
   $('#diaAnt').addEventListener('click', () => irDia(addDias(dia, -1)));
   $('#diaProx').addEventListener('click', () => irDia(addDias(dia, 1)));
   $('#diaHoje').addEventListener('click', () => irDia(hoje()));
+  if ($('#lancarComo')) $('#lancarComo').addEventListener('change', e => { S.lancarComo = e.target.value === S.user.id ? null : e.target.value; location.hash = `#/lancar?data=${dia}`; if (!params.editar) telaLancar({ data: dia }); });
+  if ($('#voltarMim')) $('#voltarMim').addEventListener('click', e => { e.preventDefault(); S.lancarComo = null; location.hash = `#/lancar?data=${dia}`; if (!params.editar) telaLancar({ data: dia }); });
 
   const f = $('#fLanc');
   const ajustarMeio = () => { const ok = aceitaMeio(f.situacao.value); f.meio_acordo.disabled = !ok; if (!ok) f.meio_acordo.value = ''; };
@@ -419,10 +431,10 @@ async function telaLancar(params) {
     const b = $('#btnSalvar'); b.disabled = true;
     const id = f.registro.value;
     const r = id ? await sb.from('lancamentos').update(o).eq('id', id)
-                 : await sb.from('lancamentos').insert({ ...o, data_contato: dia });
+                 : await sb.from('lancamentos').insert({ ...o, data_contato: dia, ...(outro ? { funcionario_id: alvo } : {}) });
     b.disabled = false;
     if (r.error) return toast(msgErro(r.error), true);
-    toast(id ? 'Lançamento atualizado.' : 'Lançamento salvo.'); atualizarAvisoGlobal();
+    toast(id ? 'Lançamento atualizado.' : (outro ? `Lançamento salvo em nome de ${nomePerfil(alvo)}.` : 'Lançamento salvo.')); atualizarAvisoGlobal();
     limpar(); await carregarDia(dia); f.id_parcelamento.focus();
   });
 
@@ -458,19 +470,19 @@ function editar(l) {
 async function verificarDuplicado(f) {
   const v = f.id_parcelamento.value.trim(); const box = $('#avisoDup'); box.innerHTML = '';
   if (!RE_ID.test(v)) return;
-  let q = sb.from('lancamentos').select('id,data_contato,situacao').eq('funcionario_id', S.user.id).eq('id_parcelamento', v)
+  let q = sb.from('lancamentos').select('id,data_contato,situacao').eq('funcionario_id', alvoLancar()).eq('id_parcelamento', v)
     .order('data_contato', { ascending: false }).limit(3);
   if (f.registro.value) q = q.neq('id', f.registro.value);
   const { data } = await q;
   if (data && data.length) {
-    box.innerHTML = `<div class="aviso atencao">Este parcelamento já foi lançado por você: ${data.map(d =>
+    box.innerHTML = `<div class="aviso atencao">Este parcelamento já foi lançado ${alvoLancar() === S.user.id ? 'por você' : `para ${esc(nomePerfil(alvoLancar()))}`}: ${data.map(d =>
       `<a href="#/lancar?data=${d.data_contato}&editar=${d.id}">${fmtData(d.data_contato)} (${esc(d.situacao || 'sem situação')})</a>`).join(', ')}.
       Se for o mesmo caso, atualize aquele registro em vez de lançar de novo.</div>`;
   }
 }
 
 async function carregarDia(dia) {
-  const { data, error } = await sb.from('lancamentos').select('*').eq('funcionario_id', S.user.id).eq('data_contato', dia).order('id');
+  const { data, error } = await sb.from('lancamentos').select('*').eq('funcionario_id', alvoLancar()).eq('data_contato', dia).order('id');
   const tb = $('#tbDia'); if (!tb) return;
   if (error) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${esc(msgErro(error))}</td></tr>`; return; }
   const rows = data || [];
@@ -638,7 +650,7 @@ async function telaBuscar(params = {}) {
       ${c('Boleto emitido em', fmtData(r.boleto_emitido))}${c('Vencimento', fmtData(r.boleto_vencimento))}${c('Nº de parcelas', r.parcelas)}${c('Valor do boleto', r.valor_boleto != null ? BRL.format(r.valor_boleto) : '')}
       ${c('Situação', esc(r.situacao || '(sem situação)'))}${c('Valor pago', r.valor_pago != null ? BRL.format(r.valor_pago) : '')}${c('Data do pagamento', fmtData(r.data_pagamento))}${c('Meio que gerou o acordo', esc(r.meio_acordo))}
       ${c('Cancelamento', r.cancelamento_status ? esc(cancNome(r.cancelamento_status)) : '')}${c('Retorno do setor', esc(r.cancelamento_obs))}
-      ${c('Atendente', esc(nomes[r.funcionario_id] || (r.funcionario_id === S.user.id ? S.perfil.nome : '—')))}${c('Criado em', r.criado_em ? new Date(r.criado_em).toLocaleString('pt-BR') : '')}${c('Última alteração', r.atualizado_em ? new Date(r.atualizado_em).toLocaleString('pt-BR') : '')}
+      ${c('Atendente', esc(nomes[r.funcionario_id] || (r.funcionario_id === S.user.id ? S.perfil.nome : '—')))}${r.criado_por && r.criado_por !== r.funcionario_id ? c('Lançado por', esc(nomePerfil(r.criado_por)) + ' (em nome do atendente)') : ''}${c('Criado em', r.criado_em ? new Date(r.criado_em).toLocaleString('pt-BR') : '')}${c('Última alteração', r.atualizado_em ? new Date(r.atualizado_em).toLocaleString('pt-BR') : '')}
       </div>${r.observacoes ? `<div class="detalhe-obs"><span class="dica">Observações</span><div>${esc(r.observacoes)}</div></div>` : ''}
       ${!podeEditar(r) ? '<p class="dica">Somente consulta: lançamentos de outros atendentes são alterados por eles ou pelo administrador.</p>' : ''}</td></tr>`;
   };

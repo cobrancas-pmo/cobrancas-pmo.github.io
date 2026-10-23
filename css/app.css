@@ -256,3 +256,7 @@ tr.linha-pendente td:first-child { box-shadow: inset 4px 0 0 var(--warn); }
 .resumo-busca { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-bottom: .6rem; }
 .chip-pend { text-decoration: none; }
 .chip-pend .tag { font-size: .82rem; padding: .2rem .6rem; }
+
+/* lançar em nome de (administrador) */
+.lancar-como { margin-top: .5rem; max-width: 22rem; }
+.aviso-como { margin-bottom: .8rem; }
