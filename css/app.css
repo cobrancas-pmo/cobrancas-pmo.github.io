@@ -260,3 +260,7 @@ tr.linha-pendente td:first-child { box-shadow: inset 4px 0 0 var(--warn); }
 /* lançar em nome de (administrador) */
 .lancar-como { margin-top: .5rem; max-width: 22rem; }
 .aviso-como { margin-bottom: .8rem; }
+
+/* pendentes: filtros abaixo do título */
+.filtros-pend { margin: -.3rem 0 .9rem; gap: .8rem; }
+.filtros-pend .campo { min-width: 14rem; }

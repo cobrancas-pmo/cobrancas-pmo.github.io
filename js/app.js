@@ -532,58 +532,58 @@ async function carregarDia(dia) {
 
 // ---------------------------------------------------------------- PENDENTES
 async function telaPendentes(params = {}) {
-  app().innerHTML = `<div class="cab"><div><h1>Pendentes</h1><p class="sub">Seus lançamentos ainda "em andamento" ou sem situação. Boletos vencidos e agendamentos cuja data já passou aparecem primeiro: confira e atualize a situação.</p></div>
-    <div class="acoes"><label class="campo">Mostrar<select id="filtroPend">
-      <option value="todos">Todos os pendentes</option><option value="venc">Só boletos vencidos (conferir)</option><option value="agend">Só agendamentos vencidos (conferir comparecimento)</option><option value="efet">Só encaminhados para parcelamento (conferir efetivação)</option>
-      <option value="and">Só "Em andamento"</option><option value="sem">Só "Sem situação"</option></select></label></div></div>
-    <div id="quadroEquipe"></div>
-    <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Data do contato</th><th class="num">Dias</th><th>Id parc.</th><th>Setor</th><th>Situação</th><th>Agendamento</th><th>Boleto</th><th>Observações</th><th></th></tr></thead>
-    <tbody id="tbPend"><tr><td colspan="9" class="vazio">Carregando…</td></tr></tbody></table></div>
-    <p class="dica">Boletos: o aviso aparece ${PRAZO_UTEIS} dias úteis após o vencimento (prazo de compensação bancária; feriados não são considerados). Agendamentos: o aviso aparece no dia seguinte à data agendada, enquanto o caso continuar "em andamento" (se a pessoa não compareceu, marque sem sucesso ou reagende, mudando a data). Encaminhados para parcelamento: o aviso aparece a partir do dia seguinte ao encaminhamento; se o acordo foi fechado, marque "PARCELAMENTO EFETIVADO".</p></div>`;
-  if (params.filtro && [...$('#filtroPend').options].some(o => o.value === params.filtro)) $('#filtroPend').value = params.filtro;
+  const sup = ehSup();
+  // de quem: 'eu' (padrão), 'equipe' (todos) ou o id de um atendente — só supervisão/administração
+  const de = sup && params.de && (params.de === 'equipe' || S.perfis.some(p => p.id === params.de)) ? params.de : 'eu';
+  const daEquipe = de !== 'eu';
+  const nomes = Object.fromEntries(S.perfis.map(p => [p.id, p.nome]));
+  const colsN = daEquipe ? 10 : 9;
+  app().innerHTML = `<div class="cab"><div><h1>Pendentes</h1><p class="sub">${daEquipe ? 'Lançamentos' : 'Seus lançamentos'} ainda "em andamento" ou sem situação. Os que precisam de conferência (boleto vencido, agendamento que passou, encaminhamento para parcelamento) aparecem primeiro, em vermelho.</p></div></div>
+    <div class="linha filtros-pend">
+      ${sup ? `<label class="campo">De<select id="dePend"><option value="eu">Meus pendentes</option><option value="equipe" ${de === 'equipe' ? 'selected' : ''}>Toda a equipe</option>
+        <optgroup label="Atendente">${S.perfis.filter(p => p.id !== S.user.id).map(p => `<option value="${p.id}" ${p.id === de ? 'selected' : ''}>${esc(p.nome)}${p.ativo ? '' : ' (inativo)'}</option>`).join('')}</optgroup></select></label>` : ''}
+      <label class="campo">Mostrar<select id="filtroPend">
+        <option value="todos">Todos os pendentes</option><option value="conf">Só os que precisam de conferência</option><option value="venc">Só boletos vencidos (conferir pagamento)</option><option value="agend">Só agendamentos vencidos (conferir comparecimento)</option><option value="efet">Só encaminhados para parcelamento (conferir efetivação)</option>
+        <option value="and">Só "Em andamento"</option><option value="sem">Só "Sem situação"</option></select></label>
+    </div>
+    <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Data do contato</th><th class="num">Dias</th><th>Id parc.</th><th>Setor</th><th>Situação</th><th>Agendamento</th><th>Boleto</th>${daEquipe ? '<th>Atendente</th>' : ''}<th>Observações</th><th></th></tr></thead>
+    <tbody id="tbPend"><tr><td colspan="${colsN}" class="vazio">Carregando…</td></tr></tbody></table></div>
+    <p class="dica">Boletos: o aviso aparece ${PRAZO_UTEIS} dias úteis após o vencimento (prazo de compensação bancária; feriados não são considerados). Agendamentos: no dia seguinte à data agendada, enquanto o caso continuar "em andamento" (se a pessoa não compareceu, marque sem sucesso ou reagende, mudando a data). Encaminhados para parcelamento: a partir do dia seguinte ao encaminhamento; se o acordo foi fechado, marque "PARCELAMENTO EFETIVADO".</p></div>`;
+  const fSel = $('#filtroPend');
+  if (params.filtro && [...fSel.options].some(o => o.value === params.filtro)) fSel.value = params.filtro;
+  if ($('#dePend')) $('#dePend').addEventListener('change', e => {
+    const u = new URLSearchParams(); if (e.target.value !== 'eu') u.set('de', e.target.value); if (fSel.value !== 'todos') u.set('filtro', fSel.value);
+    location.hash = '#/pendentes' + (u.toString() ? '?' + u : '');
+  });
   const codsAnd = S.situacoes.filter(s => s.categoria === 'Em andamento').map(s => `"${s.codigo.replace(/"/g, '')}"`);
-  const { data, error } = await sb.from('lancamentos').select('*').eq('funcionario_id', S.user.id)
-    .or(`situacao.is.null${codsAnd.length ? `,situacao.in.(${codsAnd.join(',')})` : ''}`)
-    .order('data_contato').order('id').limit(1000);
+  let q = sb.from('lancamentos').select('*').or(`situacao.is.null${codsAnd.length ? `,situacao.in.(${codsAnd.join(',')})` : ''}`);
+  q = de === 'eu' ? q.eq('funcionario_id', S.user.id) : de === 'equipe' ? q : q.eq('funcionario_id', de);
+  const { data, error } = await q.order('data_contato').order('id').limit(2000);
   const tb = $('#tbPend');
-  if (error) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${esc(msgErro(error))}</td></tr>`; return; }
+  if (error) { tb.innerHTML = `<tr><td colspan="${colsN}" class="vazio">${esc(msgErro(error))}</td></tr>`; return; }
   const conferir = r => statusVenc(r) === 'conferir' || statusAgend(r) === 'conferir' || statusEfet(r) === 'conferir';
   const pri = r => (conferir(r) ? 0 : (statusVenc(r) === 'compensacao' || statusAgend(r) === 'hoje') ? 1 : 2);
   const dataRef = r => [statusVenc(r) === 'conferir' ? r.boleto_vencimento : null, statusAgend(r) === 'conferir' ? r.agendamento : null, statusEfet(r) === 'conferir' ? r.situacao_desde : null].filter(Boolean).sort()[0] || '9999';
   const todas = (data || []).slice().sort((a, b) => pri(a) - pri(b) || (pri(a) === 0 ? dataRef(a).localeCompare(dataRef(b)) : 0));
+  const testes = { todos: () => true, conf: conferir, venc: r => statusVenc(r) === 'conferir', agend: r => statusAgend(r) === 'conferir', efet: r => statusEfet(r) === 'conferir', and: r => !!r.situacao, sem: r => !r.situacao };
+  // quantidades nas próprias opções do filtro (substituem os quadros da equipe)
+  [...fSel.options].forEach(o => { const n = todas.filter(testes[o.value]).length; o.textContent = o.textContent.replace(/ \(\d+\)$/, '') + ` (${n})`; });
+  const podeEditar = r => r.funcionario_id === S.user.id || ehAdmin();
+  const vazios = { venc: 'Nenhum boleto vencido para conferir. 👍', agend: 'Nenhum agendamento vencido para conferir. 👍', efet: 'Nenhum encaminhamento para parcelamento a conferir. 👍', conf: 'Nada para conferir. 👍' };
   const desenhar = () => {
-    const filtro = $('#filtroPend').value;
-    const rows = todas.filter(r => filtro === 'todos' || (filtro === 'venc' ? statusVenc(r) === 'conferir' : filtro === 'agend' ? statusAgend(r) === 'conferir' : filtro === 'efet' ? statusEfet(r) === 'conferir' : filtro === 'sem' ? !r.situacao : !!r.situacao));
-    if (!rows.length) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${filtro === 'venc' ? 'Nenhum boleto vencido para conferir. 👍' : filtro === 'agend' ? 'Nenhum agendamento vencido para conferir. 👍' : filtro === 'efet' ? 'Nenhum encaminhamento para parcelamento a conferir. 👍' : 'Nenhuma pendência. 👍'}</td></tr>`; return; }
+    const filtro = fSel.value;
+    const rows = todas.filter(testes[filtro] || testes.todos);
+    if (!rows.length) { tb.innerHTML = `<tr><td colspan="${colsN}" class="vazio">${vazios[filtro] || 'Nenhuma pendência. 👍'}</td></tr>`; return; }
     tb.innerHTML = rows.map(r => `<tr class="${conferir(r) ? 'linha-alerta' : ''}"><td>${fmtData(r.data_contato)}</td><td class="num">${diasDesde(r.data_contato)}</td>
       <td><strong>${esc(r.id_parcelamento)}</strong></td><td>${esc(r.setor || '')}</td>
       <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagEfet(r)}</td><td>${fmtData(r.agendamento)}${tagAgend(r)}</td>
       <td>${fmtData(r.boleto_emitido)}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
-      <td class="obs">${esc(r.observacoes || '')}</td><td><a class="btn peq ${conferir(r) ? 'prim' : ''}" href="#/lancar?data=${r.data_contato}&editar=${r.id}">${conferir(r) ? 'Conferir' : 'Atualizar'}</a></td></tr>`).join('');
+      ${daEquipe ? `<td>${esc(nomes[r.funcionario_id] || (r.funcionario_id === S.user.id ? S.perfil.nome : '—'))}</td>` : ''}
+      <td class="obs">${esc(r.observacoes || '')}</td><td>${podeEditar(r)
+        ? `<a class="btn peq ${conferir(r) ? 'prim' : ''}" href="#/lancar?data=${r.data_contato}&editar=${r.id}">${conferir(r) ? 'Conferir' : 'Atualizar'}</a>`
+        : `<a class="btn peq" href="#/buscar?q=${encodeURIComponent(r.id_parcelamento)}" title="Somente consulta">Ver</a>`}</td></tr>`).join('');
   };
-  $('#filtroPend').addEventListener('change', desenhar); desenhar();
-
-  // quadro da equipe (supervisão)
-  if (ehSup()) {
-    const [bol, agd, efe] = await Promise.all([buscarBoletosAConferir(true), buscarAgendamentosAConferir(true), buscarEfetivacoesAConferir(true)]);
-    const nomes = Object.fromEntries(S.perfis.map(p => [p.id, p.nome]));
-    const quadro = (titulo, lista, campo, rotQtd, rotData, rotLista, vazio) => {
-      const porFunc = {};
-      for (const r of lista) { const g = (porFunc[r.funcionario_id] ||= { qtd: 0, maisAntigo: r[campo] }); g.qtd++; if (r[campo] < g.maisAntigo) g.maisAntigo = r[campo]; }
-      const linhas = Object.entries(porFunc).sort((a, b) => b[1].qtd - a[1].qtd);
-      return `<div class="card"><div class="cab"><h2>${titulo}</h2><span class="dica">${lista.length} no total</span></div>
-      ${linhas.length ? `<div class="tabela-wrap"><table><thead><tr><th>Funcionário</th><th class="num">${rotQtd}</th><th>${rotData} mais antigo</th><th class="num">Dias desde então</th></tr></thead><tbody>
-      ${linhas.map(([id, g]) => `<tr class="${diasDesde(g.maisAntigo) > 10 ? 'linha-alerta' : ''}"><td>${esc(nomes[id] || '—')}</td><td class="num">${g.qtd}</td><td>${fmtData(g.maisAntigo)}</td><td class="num">${diasDesde(g.maisAntigo)}</td></tr>`).join('')}
-      </tbody></table></div>
-      <details class="tab-dados"><summary>${rotLista}</summary><div class="tabela-wrap"><table><thead><tr><th>Funcionário</th><th>Id parc.</th><th>Situação</th><th>${rotData}</th><th class="num">Dias</th></tr></thead><tbody>
-      ${lista.map(r => `<tr><td>${esc(nomes[r.funcionario_id] || '—')}</td><td><strong>${esc(r.id_parcelamento)}</strong></td><td class="dica">${esc(r.situacao || '(sem situação)')}</td><td>${fmtData(r[campo])}</td><td class="num">${diasDesde(r[campo])}</td></tr>`).join('')}
-      </tbody></table></div></details>` : `<p class="vazio">${vazio}</p>`}</div>`;
-    };
-    $('#quadroEquipe').innerHTML =
-      quadro('Boletos vencidos sem conferência — equipe', bol, 'boleto_vencimento', 'Boletos a conferir', 'Vencimento', 'Ver todos os boletos vencidos da equipe', 'Nenhum boleto vencido aguardando conferência na equipe. 👍') +
-      quadro('Agendamentos vencidos sem atualização — equipe', agd, 'agendamento', 'Agendamentos a conferir', 'Agendamento', 'Ver todos os agendamentos vencidos da equipe', 'Nenhum agendamento vencido aguardando atualização na equipe. 👍') +
-      quadro('Encaminhados para parcelamento sem confirmação — equipe', efe, 'situacao_desde', 'Encaminhamentos a conferir', 'Encaminhamento', 'Ver todos os encaminhamentos da equipe', 'Nenhum encaminhamento para parcelamento aguardando confirmação na equipe. 👍');
-  }
+  fSel.addEventListener('change', desenhar); desenhar();
 }
 
 // ---------------------------------------------------------------- BUSCAR
@@ -1204,7 +1204,7 @@ async function telaCancelamentos(params) {
   const nomes = Object.fromEntries(S.perfis.map(p => [p.id, p.nome]));
 
   if (!ehSup()) {
-    app().innerHTML = `<div class="cab"><div><h1>Cancelamentos</h1><p class="sub">Seus casos com a situação "Enviar para cancelamento" e o andamento junto à Recuperação de Ativos. O relatório semanal é gerado pela supervisão às quintas-feiras.</p></div></div>
+    app().innerHTML = `<div class="cab"><div><h1>Cancelamentos</h1><p class="sub">Seus casos com a situação "Cancelamento" e o andamento junto à Recuperação de Ativos. O relatório semanal é gerado pela supervisão às quintas-feiras.</p></div></div>
       <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Data do contato</th><th>Id parc.</th><th>Setor</th><th>Andamento</th><th>Lote</th><th>Retorno</th></tr></thead><tbody id="tbMeus"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody></table></div></div>`;
     const [{ data, error }, { data: lotes }] = await Promise.all([
       sb.from('lancamentos').select('*').eq('funcionario_id', S.user.id).not('cancelamento_status', 'is', null).order('data_contato', { ascending: false }).limit(500),
@@ -1220,7 +1220,7 @@ async function telaCancelamentos(params) {
   }
 
   const quinta = proximaQuinta();
-  app().innerHTML = `<div class="cab"><div><h1>Cancelamentos</h1><p class="sub">Casos com a situação "Enviar para cancelamento". Às quintas-feiras, um supervisor gera o relatório único da semana para a Recuperação de Ativos.</p></div>
+  app().innerHTML = `<div class="cab"><div><h1>Cancelamentos</h1><p class="sub">Casos com a situação "Cancelamento". Às quintas-feiras, um supervisor gera o relatório único da semana para a Recuperação de Ativos.</p></div>
       <div class="dica">Próxima quinta-feira: <strong>${fmtData(quinta)}</strong></div></div>
     <div class="card"><div class="cab"><h2>Aguardando envio</h2><span class="dica" id="qtdFila"></span></div>
       <div class="tabela-wrap"><table><thead><tr><th><input type="checkbox" id="marcarTodos" checked aria-label="Marcar todos"></th><th>Data do contato</th><th>Id parc.</th><th>Origem</th><th>Setor</th><th>Funcionário</th><th>Observações</th><th></th></tr></thead>
