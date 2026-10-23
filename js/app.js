@@ -65,6 +65,7 @@ function msgErro(e) {
     [/lancamentos_meio_acordo_check/i, 'Meio que gerou o acordo inválido.'],
     [/lancamentos_novo_parcelamento_check/i, 'Nº do novo parcelamento inválido: use apenas números/letras, sem espaços.'],
     [/lancamentos_valor_acordo_check/i, 'Valor total do acordo inválido.'],
+    [/lancamentos_tipo_acordo_check/i, 'Tipo de acordo inválido.'],
     [/lancamentos_situacao_fkey/i, 'Esta situação já foi usada em lançamentos e não pode ser excluída. Desative-a.'],
     [/lancamentos_vencimento_apos_emissao/i, 'O vencimento não pode ser anterior à emissão do boleto.'],
     [/Failed to fetch|NetworkError/i, 'Sem conexão com o servidor. Verifique sua internet.'],
@@ -348,19 +349,30 @@ async function telaLancar(params) {
       <label class="campo">Ligação<select name="ligacao">${optList(OPC.ligacao)}</select></label>
       <label class="campo">Agendamento (data)<input type="date" name="agendamento"></label>
     </div></fieldset>
-    <fieldset><legend>Boletos</legend><div class="grade">
-      <label class="campo">Boleto emitido em<input type="date" name="boleto_emitido"></label>
-      <label class="campo">Data de vencimento<input type="date" name="boleto_vencimento"></label>
-      <label class="campo">Nº de parcelas<input type="number" name="parcelas" min="1" max="240" step="1"></label>
-      <label class="campo">Valor do boleto (R$)<input name="valor_boleto" inputmode="decimal" placeholder="0,00"></label>
-    </div></fieldset>
+    <fieldset id="fsAcordo" data-tipo=""><legend>Acordo e pagamento</legend>
+      <div class="campo tipo-acordo"><span id="rotTipo">Tipo de acordo</span>
+        <div class="seg" role="radiogroup" aria-labelledby="rotTipo">
+          <label><input type="radio" name="tipo_acordo" value="" checked><span>— Nenhum</span></label>
+          <label><input type="radio" name="tipo_acordo" value="Boleto"><span>Boleto</span></label>
+          <label><input type="radio" name="tipo_acordo" value="Novo parcelamento"><span>Novo parcelamento</span></label>
+        </div></div>
+      <p class="dica so-nenhum">Sem boleto ou parcelamento neste contato. Escolha o tipo acima quando houver.</p>
+      <div class="grade grade-acordo">
+        <p class="subtit so-parc" style="order:1">O novo acordo</p>
+        <label class="campo so-parc" style="order:2">Nº do novo parcelamento<input name="novo_parcelamento" maxlength="30" inputmode="numeric"></label>
+        <label class="campo so-parc" style="order:3">Valor total do acordo (R$)<input name="valor_acordo" inputmode="decimal" placeholder="0,00"></label>
+        <label class="campo com-tipo campo-parcelas">Nº de parcelas<input type="number" name="parcelas" min="1" max="240" step="1"></label>
+        <p class="subtit so-parc" style="order:6">1ª parcela (entrada)</p>
+        <label class="campo com-tipo" style="order:11"><span class="rot-boleto">Emitido em</span><span class="rot-parc">Emitida em</span><input type="date" name="boleto_emitido"></label>
+        <label class="campo com-tipo" style="order:12">Vencimento<input type="date" name="boleto_vencimento"><span class="dica rot-parc">Gera o aviso para conferir o pagamento</span></label>
+        <label class="campo com-tipo" style="order:14"><span class="rot-boleto">Valor do boleto (R$)</span><span class="rot-parc">Valor da 1ª parcela (R$)</span><input name="valor_boleto" inputmode="decimal" placeholder="0,00"></label>
+      </div>
+    </fieldset>
     <fieldset><legend>Resultado</legend><div class="grade">
       <label class="campo largo">Situação<select name="situacao">${optSituacoes()}</select><span class="dica" id="descSit"></span></label>
       <label class="campo">Valor pago (R$)<input name="valor_pago" inputmode="decimal" placeholder="0,00"></label>
       <label class="campo">Data do pagamento<input type="date" name="data_pagamento"></label>
       <label class="campo" id="cMeio">Meio que gerou o acordo<select name="meio_acordo" disabled>${optList(OPC.meio_acordo)}</select><span class="dica">Para pagos e boletos em aberto</span></label>
-      <label class="campo">Valor total do novo acordo (R$)<input name="valor_acordo" inputmode="decimal" placeholder="0,00" disabled><span class="dica">Só para novo parcelamento efetivado</span></label>
-      <label class="campo">Nº do novo parcelamento<input name="novo_parcelamento" maxlength="30" inputmode="numeric" disabled><span class="dica">Só para novo parcelamento efetivado</span></label>
       <label class="campo largo">Observações <span class="dica">— não escreva nome, CPF ou telefone do contribuinte</span><textarea name="observacoes" maxlength="500"></textarea></label>
     </div></fieldset>
     <div class="acoes">
@@ -382,17 +394,19 @@ async function telaLancar(params) {
   if ($('#voltarMim')) $('#voltarMim').addEventListener('click', e => { e.preventDefault(); S.lancarComo = null; location.hash = `#/lancar?data=${dia}`; if (!params.editar) telaLancar({ data: dia }); });
 
   const f = $('#fLanc');
-  const ajustarMeio = () => {
-    const ok = aceitaMeio(f.situacao.value); f.meio_acordo.disabled = !ok; if (!ok) f.meio_acordo.value = '';
-    const na = sitNovoAcordo(f.situacao.value);
-    for (const nm of ['valor_acordo', 'novo_parcelamento']) { f[nm].disabled = !na; if (!na) f[nm].value = ''; }
-  };
+  const ajustarMeio = () => { const ok = aceitaMeio(f.situacao.value); f.meio_acordo.disabled = !ok; if (!ok) f.meio_acordo.value = ''; };
+  // tipo de acordo: mostra os campos de boleto ou de novo parcelamento
+  const tipoAtual = () => (f.querySelector('[name=tipo_acordo]:checked') || {}).value || '';
+  const setTipo = t => { const r = f.querySelector(`[name=tipo_acordo][value="${t}"]`); if (r) r.checked = true; $('#fsAcordo').dataset.tipo = t === 'Boleto' ? 'boleto' : t ? 'parc' : ''; };
+  f._setTipo = setTipo;
+  f.querySelectorAll('[name=tipo_acordo]').forEach(r => r.addEventListener('change', () => setTipo(tipoAtual())));
   f._ajustarMeio = ajustarMeio;
-  const limpar = () => { f.reset(); f._wppConferido = null; ajustarMeio(); f.registro.value = ''; $('#tituloForm').textContent = 'Novo lançamento'; $('#btnSalvar').textContent = 'Salvar lançamento'; $('#avisoDup').innerHTML = ''; $('#descSit').textContent = ''; };
+  const limpar = () => { f.reset(); f._wppConferido = null; ajustarMeio(); setTipo(''); f.registro.value = ''; $('#tituloForm').textContent = 'Novo lançamento'; $('#btnSalvar').textContent = 'Salvar lançamento'; $('#avisoDup').innerHTML = ''; $('#descSit').textContent = ''; };
   $('#btnLimpar').addEventListener('click', limpar);
   f.situacao.addEventListener('change', () => {
     $('#descSit').textContent = S.situacoes.find(s => s.codigo === f.situacao.value)?.descricao || '';
     ajustarMeio();
+    if (sitNovoAcordo(f.situacao.value) && tipoAtual() !== 'Novo parcelamento') setTipo('Novo parcelamento');
     if (catDe(f.situacao.value) === 'Pago') {
       if (!f.data_pagamento.value) f.data_pagamento.value = hoje();
       if (!f.valor_pago.value && f.valor_boleto.value) f.valor_pago.value = f.valor_boleto.value;   // sugere o valor do boleto
@@ -410,10 +424,14 @@ async function telaLancar(params) {
       parcelas: f.parcelas.value ? Number(f.parcelas.value) : null, valor_boleto: parseValor(f.valor_boleto.value), situacao: f.situacao.value || null,
       valor_pago: parseValor(f.valor_pago.value), data_pagamento: f.data_pagamento.value || null, observacoes: f.observacoes.value.trim() || null,
       meio_acordo: f.meio_acordo.value || null,
-      valor_acordo: parseValor(f.valor_acordo.value), novo_parcelamento: f.novo_parcelamento.value.trim() || null
+      valor_acordo: parseValor(f.valor_acordo.value), novo_parcelamento: f.novo_parcelamento.value.trim() || null,
+      tipo_acordo: tipoAtual() || null
     };
     if (!aceitaMeio(o.situacao)) o.meio_acordo = null;
-    if (!sitNovoAcordo(o.situacao)) { o.valor_acordo = null; o.novo_parcelamento = null; }
+    if (sitNovoAcordo(o.situacao) && o.tipo_acordo !== 'Novo parcelamento') o.tipo_acordo = 'Novo parcelamento';
+    if (!o.tipo_acordo) { o.boleto_emitido = o.boleto_vencimento = null; o.parcelas = null; o.valor_boleto = null; }
+    if (o.tipo_acordo !== 'Novo parcelamento') { o.valor_acordo = null; o.novo_parcelamento = null; }
+    const ehParc = o.tipo_acordo === 'Novo parcelamento';
     if (Number.isNaN(o.valor_acordo)) return toast('Valor total do acordo inválido. Exemplo: 2.400,50', true);
     if (o.novo_parcelamento && !RE_ID.test(o.novo_parcelamento)) return toast('Nº do novo parcelamento: use só números/letras, sem espaços.', true);
     if (sitNovoAcordo(o.situacao) && o.valor_acordo == null && !confirm('Parcelamento efetivado sem o valor total do novo acordo. Salvar mesmo assim?')) return;
@@ -421,10 +439,11 @@ async function telaLancar(params) {
     f.id_parcelamento.removeAttribute('aria-invalid');
     if (o.origem && !RE_ID.test(o.origem)) return toast('Origem/inscrição: use só números/letras, sem espaços.', true);
     if (Number.isNaN(o.valor_pago)) return toast('Valor pago inválido. Exemplo: 388,15', true);
-    if (Number.isNaN(o.valor_boleto)) return toast('Valor do boleto inválido. Exemplo: 388,15', true);
-    if (o.valor_boleto != null && !o.boleto_emitido && !confirm('Há valor do boleto, mas sem a data de emissão. Salvar mesmo assim?')) return;
-    if (o.boleto_vencimento && o.boleto_emitido && o.boleto_vencimento < o.boleto_emitido) return toast('O vencimento não pode ser anterior à emissão do boleto.', true);
-    if (o.boleto_emitido && !o.boleto_vencimento && sitConfere(o.situacao) && !confirm('Boleto sem data de vencimento: o sistema não poderá avisar quando conferir o pagamento. Salvar mesmo assim?')) return;
+    const oQue = ehParc ? 'da 1ª parcela' : 'do boleto';
+    if (Number.isNaN(o.valor_boleto)) return toast(`Valor ${oQue} inválido. Exemplo: 388,15`, true);
+    if (o.valor_boleto != null && !o.boleto_emitido && !confirm(`Há valor ${oQue}, mas sem a data de emissão. Salvar mesmo assim?`)) return;
+    if (o.boleto_vencimento && o.boleto_emitido && o.boleto_vencimento < o.boleto_emitido) return toast(`O vencimento não pode ser anterior à emissão ${oQue}.`, true);
+    if (o.boleto_emitido && !o.boleto_vencimento && sitConfere(o.situacao) && !confirm(`${ehParc ? '1ª parcela' : 'Boleto'} sem data de vencimento: o sistema não poderá avisar quando conferir o pagamento. Salvar mesmo assim?`)) return;
     if (o.parcelas != null && !(Number.isInteger(o.parcelas) && o.parcelas >= 1 && o.parcelas <= 240)) return toast('Nº de parcelas deve ser um número inteiro de 1 a 240.', true);
     const cat = catDe(o.situacao);
     if (cat === 'Pago') {
@@ -474,7 +493,7 @@ function editar(l) {
   f.data_pagamento.value = l.data_pagamento || '';
   f.meio_acordo.disabled = !aceitaMeio(l.situacao);
   f.valor_acordo.value = fmtValorInput(l.valor_acordo); f.novo_parcelamento.value = l.novo_parcelamento || '';
-  f.valor_acordo.disabled = f.novo_parcelamento.disabled = !sitNovoAcordo(l.situacao);
+  f._setTipo(l.tipo_acordo || (l.valor_acordo != null || l.novo_parcelamento || sitNovoAcordo(l.situacao) ? 'Novo parcelamento' : (l.boleto_emitido || l.boleto_vencimento || l.valor_boleto != null ? 'Boleto' : '')));
   f._wppConferido = null;
   const dono = l.funcionario_id !== S.user.id ? ` (lançamento de ${S.perfis.find(p => p.id === l.funcionario_id)?.nome || 'outro funcionário'})` : '';
   $('#tituloForm').textContent = `Editando lançamento – Id ${l.id_parcelamento}${dono}`;
@@ -664,7 +683,7 @@ async function telaBuscar(params = {}) {
     const c = (rot, v) => (v == null || v === '' ? '' : `<div><span class="dica">${rot}</span><div>${v}</div></div>`);
     return `<tr class="linha-detalhe" data-det-de="${r.id}"><td colspan="${colsN}"><div class="detalhe-grade">
       ${c('Fonte do contato', esc(r.fonte_contato))}${c('WhatsApp', esc(r.whatsapp))}${c('SMS', esc(r.sms))}${c('Ligação', esc(r.ligacao))}${c('Agendamento', fmtData(r.agendamento))}
-      ${c('Boleto emitido em', fmtData(r.boleto_emitido))}${c('Vencimento', fmtData(r.boleto_vencimento))}${c('Nº de parcelas', r.parcelas)}${c('Valor do boleto', r.valor_boleto != null ? BRL.format(r.valor_boleto) : '')}
+      ${c('Tipo de acordo', esc(r.tipo_acordo))}${c(r.tipo_acordo === 'Novo parcelamento' ? '1ª parcela emitida em' : 'Boleto emitido em', fmtData(r.boleto_emitido))}${c('Vencimento', fmtData(r.boleto_vencimento))}${c('Nº de parcelas', r.parcelas)}${c('Valor do boleto', r.valor_boleto != null ? BRL.format(r.valor_boleto) : '')}
       ${c('Situação', esc(r.situacao || '(sem situação)'))}${c('Valor pago', r.valor_pago != null ? BRL.format(r.valor_pago) : '')}${c('Data do pagamento', fmtData(r.data_pagamento))}${c('Meio que gerou o acordo', esc(r.meio_acordo))}
       ${c('Valor total do novo acordo', r.valor_acordo != null ? BRL.format(r.valor_acordo) : '')}${c('Nº do novo parcelamento', esc(r.novo_parcelamento))}${c('Na situação atual desde', fmtData(r.situacao_desde))}
       ${c('Cancelamento', r.cancelamento_status ? esc(cancNome(r.cancelamento_status)) : '')}${c('Retorno do setor', esc(r.cancelamento_obs))}

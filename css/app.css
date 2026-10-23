@@ -264,3 +264,23 @@ tr.linha-pendente td:first-child { box-shadow: inset 4px 0 0 var(--warn); }
 /* pendentes: filtros abaixo do título */
 .filtros-pend { margin: -.3rem 0 .9rem; gap: .8rem; }
 .filtros-pend .campo { min-width: 14rem; }
+
+/* Lançar: seção Acordo e pagamento */
+.tipo-acordo { margin-bottom: .7rem; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; width: max-content; max-width: 100%; }
+.seg label { cursor: pointer; position: relative; }
+.seg input { position: absolute; left: 0; top: 0; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+.seg span { display: block; padding: .5rem .95rem; font-weight: 600; font-size: .9rem; color: var(--ink-2); border-right: 1px solid var(--line); }
+.seg label:last-child span { border-right: 0; }
+.seg input:checked + span { background: var(--primary); color: var(--primary-ink); }
+.seg input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: -3px; }
+.subtit { grid-column: 1 / -1; margin: .2rem 0 -.3rem; font-size: .78rem; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; color: var(--primary); }
+#fsAcordo .so-parc, #fsAcordo .rot-parc, #fsAcordo .com-tipo, #fsAcordo .rot-boleto { display: none; }
+#fsAcordo[data-tipo=""] .so-nenhum { display: block; }
+#fsAcordo .so-nenhum { display: none; margin: 0; }
+#fsAcordo[data-tipo="boleto"] .com-tipo, #fsAcordo[data-tipo="parc"] .com-tipo, #fsAcordo[data-tipo="parc"] label.so-parc { display: flex; }
+#fsAcordo[data-tipo="parc"] p.so-parc { display: block; }
+#fsAcordo[data-tipo="boleto"] .rot-boleto, #fsAcordo[data-tipo="parc"] .rot-parc { display: inline; }
+#fsAcordo[data-tipo="parc"] .dica.rot-parc { display: block; }
+#fsAcordo[data-tipo="boleto"] .campo-parcelas { order: 13; }
+#fsAcordo[data-tipo="parc"] .campo-parcelas { order: 4; }
