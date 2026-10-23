@@ -63,6 +63,8 @@ function msgErro(e) {
     [/lancamentos_id_parcelamento_check/i, 'Id do parcelamento inválido: use apenas números/letras, sem espaços (nada de nomes).'],
     [/lancamentos_origem_check/i, 'Origem/inscrição inválida: use apenas números/letras, sem espaços.'],
     [/lancamentos_meio_acordo_check/i, 'Meio que gerou o acordo inválido.'],
+    [/lancamentos_novo_parcelamento_check/i, 'Nº do novo parcelamento inválido: use apenas números/letras, sem espaços.'],
+    [/lancamentos_valor_acordo_check/i, 'Valor total do acordo inválido.'],
     [/lancamentos_situacao_fkey/i, 'Esta situação já foi usada em lançamentos e não pode ser excluída. Desative-a.'],
     [/lancamentos_vencimento_apos_emissao/i, 'O vencimento não pode ser anterior à emissão do boleto.'],
     [/Failed to fetch|NetworkError/i, 'Sem conexão com o servidor. Verifique sua internet.'],
@@ -89,6 +91,7 @@ const alvoLancar = () => (ehAdmin() && S.lancarComo) || S.user.id;
 const nomePerfil = id => (id === S.user.id ? S.perfil.nome : (S.perfis.find(p => p.id === id)?.nome || 'outro atendente'));
 const catDe = cod => (cod ? (S.situacoes.find(s => s.codigo === cod)?.categoria || 'Outros') : 'Sem situação');
 // "Meio que gerou o acordo" só faz sentido quando houve pagamento ou boleto/acordo em aberto
+const sitNovoAcordo = cod => !!cod && !!S.situacoes.find(s => s.codigo === cod && s.novo_acordo);
 const aceitaMeio = cod => catDe(cod) === 'Pago' || sitConfere(cod);
 const app = () => $('#app');
 
@@ -356,6 +359,8 @@ async function telaLancar(params) {
       <label class="campo">Valor pago (R$)<input name="valor_pago" inputmode="decimal" placeholder="0,00"></label>
       <label class="campo">Data do pagamento<input type="date" name="data_pagamento"></label>
       <label class="campo" id="cMeio">Meio que gerou o acordo<select name="meio_acordo" disabled>${optList(OPC.meio_acordo)}</select><span class="dica">Para pagos e boletos em aberto</span></label>
+      <label class="campo">Valor total do novo acordo (R$)<input name="valor_acordo" inputmode="decimal" placeholder="0,00" disabled><span class="dica">Só para novo parcelamento efetivado</span></label>
+      <label class="campo">Nº do novo parcelamento<input name="novo_parcelamento" maxlength="30" inputmode="numeric" disabled><span class="dica">Só para novo parcelamento efetivado</span></label>
       <label class="campo largo">Observações <span class="dica">— não escreva nome, CPF ou telefone do contribuinte</span><textarea name="observacoes" maxlength="500"></textarea></label>
     </div></fieldset>
     <div class="acoes">
@@ -377,7 +382,11 @@ async function telaLancar(params) {
   if ($('#voltarMim')) $('#voltarMim').addEventListener('click', e => { e.preventDefault(); S.lancarComo = null; location.hash = `#/lancar?data=${dia}`; if (!params.editar) telaLancar({ data: dia }); });
 
   const f = $('#fLanc');
-  const ajustarMeio = () => { const ok = aceitaMeio(f.situacao.value); f.meio_acordo.disabled = !ok; if (!ok) f.meio_acordo.value = ''; };
+  const ajustarMeio = () => {
+    const ok = aceitaMeio(f.situacao.value); f.meio_acordo.disabled = !ok; if (!ok) f.meio_acordo.value = '';
+    const na = sitNovoAcordo(f.situacao.value);
+    for (const nm of ['valor_acordo', 'novo_parcelamento']) { f[nm].disabled = !na; if (!na) f[nm].value = ''; }
+  };
   f._ajustarMeio = ajustarMeio;
   const limpar = () => { f.reset(); f._wppConferido = null; ajustarMeio(); f.registro.value = ''; $('#tituloForm').textContent = 'Novo lançamento'; $('#btnSalvar').textContent = 'Salvar lançamento'; $('#avisoDup').innerHTML = ''; $('#descSit').textContent = ''; };
   $('#btnLimpar').addEventListener('click', limpar);
@@ -390,7 +399,7 @@ async function telaLancar(params) {
     } else f.data_pagamento.value = '';
   });
   f.id_parcelamento.addEventListener('blur', () => verificarDuplicado(f));
-  for (const nm of ['valor_pago', 'valor_boleto']) f[nm].addEventListener('blur', () => { const v = parseValor(f[nm].value); if (v != null && !Number.isNaN(v)) f[nm].value = fmtValorInput(v); });
+  for (const nm of ['valor_pago', 'valor_boleto', 'valor_acordo']) f[nm].addEventListener('blur', () => { const v = parseValor(f[nm].value); if (v != null && !Number.isNaN(v)) f[nm].value = fmtValorInput(v); });
 
   f.addEventListener('submit', async e => {
     e.preventDefault();
@@ -400,9 +409,14 @@ async function telaLancar(params) {
       ligacao: f.ligacao.value || null, agendamento: f.agendamento.value || null, boleto_emitido: f.boleto_emitido.value || null, boleto_vencimento: f.boleto_vencimento.value || null,
       parcelas: f.parcelas.value ? Number(f.parcelas.value) : null, valor_boleto: parseValor(f.valor_boleto.value), situacao: f.situacao.value || null,
       valor_pago: parseValor(f.valor_pago.value), data_pagamento: f.data_pagamento.value || null, observacoes: f.observacoes.value.trim() || null,
-      meio_acordo: f.meio_acordo.value || null
+      meio_acordo: f.meio_acordo.value || null,
+      valor_acordo: parseValor(f.valor_acordo.value), novo_parcelamento: f.novo_parcelamento.value.trim() || null
     };
     if (!aceitaMeio(o.situacao)) o.meio_acordo = null;
+    if (!sitNovoAcordo(o.situacao)) { o.valor_acordo = null; o.novo_parcelamento = null; }
+    if (Number.isNaN(o.valor_acordo)) return toast('Valor total do acordo inválido. Exemplo: 2.400,50', true);
+    if (o.novo_parcelamento && !RE_ID.test(o.novo_parcelamento)) return toast('Nº do novo parcelamento: use só números/letras, sem espaços.', true);
+    if (sitNovoAcordo(o.situacao) && o.valor_acordo == null && !confirm('Parcelamento efetivado sem o valor total do novo acordo. Salvar mesmo assim?')) return;
     if (!RE_ID.test(o.id_parcelamento)) { f.id_parcelamento.setAttribute('aria-invalid', 'true'); f.id_parcelamento.focus(); return toast('Informe o Id do parcelamento (só números/letras, sem espaços).', true); }
     f.id_parcelamento.removeAttribute('aria-invalid');
     if (o.origem && !RE_ID.test(o.origem)) return toast('Origem/inscrição: use só números/letras, sem espaços.', true);
@@ -459,6 +473,8 @@ function editar(l) {
   f.valor_boleto.value = fmtValorInput(l.valor_boleto);
   f.data_pagamento.value = l.data_pagamento || '';
   f.meio_acordo.disabled = !aceitaMeio(l.situacao);
+  f.valor_acordo.value = fmtValorInput(l.valor_acordo); f.novo_parcelamento.value = l.novo_parcelamento || '';
+  f.valor_acordo.disabled = f.novo_parcelamento.disabled = !sitNovoAcordo(l.situacao);
   f._wppConferido = null;
   const dono = l.funcionario_id !== S.user.id ? ` (lançamento de ${S.perfis.find(p => p.id === l.funcionario_id)?.nome || 'outro funcionário'})` : '';
   $('#tituloForm').textContent = `Editando lançamento – Id ${l.id_parcelamento}${dono}`;
@@ -499,7 +515,7 @@ async function carregarDia(dia) {
     return `<tr><td>${i + 1}</td><td><strong>${esc(r.id_parcelamento)}</strong>${r.origem ? `<div class="dica">Origem ${esc(r.origem)}</div>` : ''}</td>
       <td>${esc(r.setor || '')}</td><td class="dica">${acoes.map(esc).join('<br>')}${tagAgend(r)}</td>
       <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) + (r.parcelas ? `<div class="dica">${r.parcelas} parc.</div>` : '') : ''}${r.valor_boleto != null ? `<div class="dica">${BRL.format(r.valor_boleto)}</div>` : ''}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
-      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagCanc(r)}</td>
+      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${r.novo_parcelamento || r.valor_acordo != null ? `<div class="dica">Novo parc. ${esc(r.novo_parcelamento || '')}${r.valor_acordo != null ? ` · ${BRL.format(r.valor_acordo)}` : ''}</div>` : ''}${tagCanc(r)}${tagEfet(r)}</td>
       <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : ''}${r.data_pagamento ? `<div class="dica">pago em ${fmtData(r.data_pagamento)}</div>` : ''}</td>
       <td class="obs">${esc(r.observacoes || '')}</td>
       <td><div class="acoes"><button class="btn peq" data-ed="${r.id}">Editar</button><button class="btn peq perigo" data-ex="${r.id}">Excluir</button></div></td></tr>`;
@@ -518,12 +534,12 @@ async function carregarDia(dia) {
 async function telaPendentes(params = {}) {
   app().innerHTML = `<div class="cab"><div><h1>Pendentes</h1><p class="sub">Seus lançamentos ainda "em andamento" ou sem situação. Boletos vencidos e agendamentos cuja data já passou aparecem primeiro: confira e atualize a situação.</p></div>
     <div class="acoes"><label class="campo">Mostrar<select id="filtroPend">
-      <option value="todos">Todos os pendentes</option><option value="venc">Só boletos vencidos (conferir)</option><option value="agend">Só agendamentos vencidos (conferir comparecimento)</option>
+      <option value="todos">Todos os pendentes</option><option value="venc">Só boletos vencidos (conferir)</option><option value="agend">Só agendamentos vencidos (conferir comparecimento)</option><option value="efet">Só encaminhados para parcelamento (conferir efetivação)</option>
       <option value="and">Só "Em andamento"</option><option value="sem">Só "Sem situação"</option></select></label></div></div>
     <div id="quadroEquipe"></div>
     <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Data do contato</th><th class="num">Dias</th><th>Id parc.</th><th>Setor</th><th>Situação</th><th>Agendamento</th><th>Boleto</th><th>Observações</th><th></th></tr></thead>
     <tbody id="tbPend"><tr><td colspan="9" class="vazio">Carregando…</td></tr></tbody></table></div>
-    <p class="dica">Boletos: o aviso aparece ${PRAZO_UTEIS} dias úteis após o vencimento (prazo de compensação bancária; feriados não são considerados). Agendamentos: o aviso aparece no dia seguinte à data agendada, enquanto o caso continuar "em andamento". Se a pessoa não compareceu, use "SEM SUCESSO – NÃO COMPARECEU" (ou reagende, mudando a data).</p></div>`;
+    <p class="dica">Boletos: o aviso aparece ${PRAZO_UTEIS} dias úteis após o vencimento (prazo de compensação bancária; feriados não são considerados). Agendamentos: o aviso aparece no dia seguinte à data agendada, enquanto o caso continuar "em andamento" (se a pessoa não compareceu, marque sem sucesso ou reagende, mudando a data). Encaminhados para parcelamento: o aviso aparece a partir do dia seguinte ao encaminhamento; se o acordo foi fechado, marque "PARCELAMENTO EFETIVADO".</p></div>`;
   if (params.filtro && [...$('#filtroPend').options].some(o => o.value === params.filtro)) $('#filtroPend').value = params.filtro;
   const codsAnd = S.situacoes.filter(s => s.categoria === 'Em andamento').map(s => `"${s.codigo.replace(/"/g, '')}"`);
   const { data, error } = await sb.from('lancamentos').select('*').eq('funcionario_id', S.user.id)
@@ -531,17 +547,17 @@ async function telaPendentes(params = {}) {
     .order('data_contato').order('id').limit(1000);
   const tb = $('#tbPend');
   if (error) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${esc(msgErro(error))}</td></tr>`; return; }
-  const conferir = r => statusVenc(r) === 'conferir' || statusAgend(r) === 'conferir';
+  const conferir = r => statusVenc(r) === 'conferir' || statusAgend(r) === 'conferir' || statusEfet(r) === 'conferir';
   const pri = r => (conferir(r) ? 0 : (statusVenc(r) === 'compensacao' || statusAgend(r) === 'hoje') ? 1 : 2);
-  const dataRef = r => [statusVenc(r) === 'conferir' ? r.boleto_vencimento : null, statusAgend(r) === 'conferir' ? r.agendamento : null].filter(Boolean).sort()[0] || '9999';
+  const dataRef = r => [statusVenc(r) === 'conferir' ? r.boleto_vencimento : null, statusAgend(r) === 'conferir' ? r.agendamento : null, statusEfet(r) === 'conferir' ? r.situacao_desde : null].filter(Boolean).sort()[0] || '9999';
   const todas = (data || []).slice().sort((a, b) => pri(a) - pri(b) || (pri(a) === 0 ? dataRef(a).localeCompare(dataRef(b)) : 0));
   const desenhar = () => {
     const filtro = $('#filtroPend').value;
-    const rows = todas.filter(r => filtro === 'todos' || (filtro === 'venc' ? statusVenc(r) === 'conferir' : filtro === 'agend' ? statusAgend(r) === 'conferir' : filtro === 'sem' ? !r.situacao : !!r.situacao));
-    if (!rows.length) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${filtro === 'venc' ? 'Nenhum boleto vencido para conferir. 👍' : filtro === 'agend' ? 'Nenhum agendamento vencido para conferir. 👍' : 'Nenhuma pendência. 👍'}</td></tr>`; return; }
+    const rows = todas.filter(r => filtro === 'todos' || (filtro === 'venc' ? statusVenc(r) === 'conferir' : filtro === 'agend' ? statusAgend(r) === 'conferir' : filtro === 'efet' ? statusEfet(r) === 'conferir' : filtro === 'sem' ? !r.situacao : !!r.situacao));
+    if (!rows.length) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${filtro === 'venc' ? 'Nenhum boleto vencido para conferir. 👍' : filtro === 'agend' ? 'Nenhum agendamento vencido para conferir. 👍' : filtro === 'efet' ? 'Nenhum encaminhamento para parcelamento a conferir. 👍' : 'Nenhuma pendência. 👍'}</td></tr>`; return; }
     tb.innerHTML = rows.map(r => `<tr class="${conferir(r) ? 'linha-alerta' : ''}"><td>${fmtData(r.data_contato)}</td><td class="num">${diasDesde(r.data_contato)}</td>
       <td><strong>${esc(r.id_parcelamento)}</strong></td><td>${esc(r.setor || '')}</td>
-      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div></td><td>${fmtData(r.agendamento)}${tagAgend(r)}</td>
+      <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagEfet(r)}</td><td>${fmtData(r.agendamento)}${tagAgend(r)}</td>
       <td>${fmtData(r.boleto_emitido)}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
       <td class="obs">${esc(r.observacoes || '')}</td><td><a class="btn peq ${conferir(r) ? 'prim' : ''}" href="#/lancar?data=${r.data_contato}&editar=${r.id}">${conferir(r) ? 'Conferir' : 'Atualizar'}</a></td></tr>`).join('');
   };
@@ -549,7 +565,7 @@ async function telaPendentes(params = {}) {
 
   // quadro da equipe (supervisão)
   if (ehSup()) {
-    const [bol, agd] = await Promise.all([buscarBoletosAConferir(true), buscarAgendamentosAConferir(true)]);
+    const [bol, agd, efe] = await Promise.all([buscarBoletosAConferir(true), buscarAgendamentosAConferir(true), buscarEfetivacoesAConferir(true)]);
     const nomes = Object.fromEntries(S.perfis.map(p => [p.id, p.nome]));
     const quadro = (titulo, lista, campo, rotQtd, rotData, rotLista, vazio) => {
       const porFunc = {};
@@ -565,7 +581,8 @@ async function telaPendentes(params = {}) {
     };
     $('#quadroEquipe').innerHTML =
       quadro('Boletos vencidos sem conferência — equipe', bol, 'boleto_vencimento', 'Boletos a conferir', 'Vencimento', 'Ver todos os boletos vencidos da equipe', 'Nenhum boleto vencido aguardando conferência na equipe. 👍') +
-      quadro('Agendamentos vencidos sem atualização — equipe', agd, 'agendamento', 'Agendamentos a conferir', 'Agendamento', 'Ver todos os agendamentos vencidos da equipe', 'Nenhum agendamento vencido aguardando atualização na equipe. 👍');
+      quadro('Agendamentos vencidos sem atualização — equipe', agd, 'agendamento', 'Agendamentos a conferir', 'Agendamento', 'Ver todos os agendamentos vencidos da equipe', 'Nenhum agendamento vencido aguardando atualização na equipe. 👍') +
+      quadro('Encaminhados para parcelamento sem confirmação — equipe', efe, 'situacao_desde', 'Encaminhamentos a conferir', 'Encaminhamento', 'Ver todos os encaminhamentos da equipe', 'Nenhum encaminhamento para parcelamento aguardando confirmação na equipe. 👍');
   }
 }
 
@@ -634,11 +651,11 @@ async function telaBuscar(params = {}) {
   const realce = t => { const v = esc(t ?? ''); if (!P.q) return v; const i = String(t ?? '').toLowerCase().indexOf(P.q.toLowerCase()); return i < 0 ? v : esc(String(t).slice(0, i)) + '<mark>' + esc(String(t).slice(i, i + P.q.length)) + '</mark>' + esc(String(t).slice(i + P.q.length)); };
   const acoesTxt = r => [r.whatsapp && `WhatsApp: ${r.whatsapp}`, r.sms && `SMS: ${r.sms}`, r.ligacao && `Ligação: ${r.ligacao}`, r.agendamento && `Agend.: ${fmtData(r.agendamento)}`].filter(Boolean).map(esc).join('<br>');
   const colsN = sup ? 9 : 8;
-  const linha = r => `<tr data-id="${r.id}" class="${ehPend(r) ? 'linha-pendente' : ''} ${statusVenc(r) === 'conferir' || statusAgend(r) === 'conferir' ? 'linha-alerta' : ''}">
+  const linha = r => `<tr data-id="${r.id}" class="${ehPend(r) ? 'linha-pendente' : ''} ${statusVenc(r) === 'conferir' || statusAgend(r) === 'conferir' || statusEfet(r) === 'conferir' ? 'linha-alerta' : ''}">
       <td>${fmtData(r.data_contato)}<div class="dica">${diaSemana(r.data_contato).slice(0, 3)}</div></td>
       <td><strong>${realce(r.id_parcelamento)}</strong>${r.origem ? `<div class="dica">Origem ${realce(r.origem)}</div>` : ''}</td>
       <td>${esc(r.setor || '')}</td><td class="dica">${acoesTxt(r)}${tagAgend(r)}</td>
-      <td>${ehPend(r) ? '<span class="tag pendente">⏳ Pendente</span> ' : ''}${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagCanc(r)}</td>
+      <td>${ehPend(r) ? '<span class="tag pendente">⏳ Pendente</span> ' : ''}${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${r.novo_parcelamento || r.valor_acordo != null ? `<div class="dica">Novo parc. ${esc(r.novo_parcelamento || '')}${r.valor_acordo != null ? ` · ${BRL.format(r.valor_acordo)}` : ''}</div>` : ''}${tagCanc(r)}${tagEfet(r)}</td>
       <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) : ''}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${r.valor_boleto != null ? `<div class="dica">${BRL.format(r.valor_boleto)}</div>` : ''}${tagVenc(r)}</td>
       <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : ''}${r.data_pagamento ? `<div class="dica">pago em ${fmtData(r.data_pagamento)}</div>` : ''}</td>
       ${sup ? `<td>${esc(nomes[r.funcionario_id] || '—')}</td>` : ''}
@@ -649,6 +666,7 @@ async function telaBuscar(params = {}) {
       ${c('Fonte do contato', esc(r.fonte_contato))}${c('WhatsApp', esc(r.whatsapp))}${c('SMS', esc(r.sms))}${c('Ligação', esc(r.ligacao))}${c('Agendamento', fmtData(r.agendamento))}
       ${c('Boleto emitido em', fmtData(r.boleto_emitido))}${c('Vencimento', fmtData(r.boleto_vencimento))}${c('Nº de parcelas', r.parcelas)}${c('Valor do boleto', r.valor_boleto != null ? BRL.format(r.valor_boleto) : '')}
       ${c('Situação', esc(r.situacao || '(sem situação)'))}${c('Valor pago', r.valor_pago != null ? BRL.format(r.valor_pago) : '')}${c('Data do pagamento', fmtData(r.data_pagamento))}${c('Meio que gerou o acordo', esc(r.meio_acordo))}
+      ${c('Valor total do novo acordo', r.valor_acordo != null ? BRL.format(r.valor_acordo) : '')}${c('Nº do novo parcelamento', esc(r.novo_parcelamento))}${c('Na situação atual desde', fmtData(r.situacao_desde))}
       ${c('Cancelamento', r.cancelamento_status ? esc(cancNome(r.cancelamento_status)) : '')}${c('Retorno do setor', esc(r.cancelamento_obs))}
       ${c('Atendente', esc(nomes[r.funcionario_id] || (r.funcionario_id === S.user.id ? S.perfil.nome : '—')))}${r.criado_por && r.criado_por !== r.funcionario_id ? c('Lançado por', esc(nomePerfil(r.criado_por)) + ' (em nome do atendente)') : ''}${c('Criado em', r.criado_em ? new Date(r.criado_em).toLocaleString('pt-BR') : '')}${c('Última alteração', r.atualizado_em ? new Date(r.atualizado_em).toLocaleString('pt-BR') : '')}
       </div>${r.observacoes ? `<div class="detalhe-obs"><span class="dica">Observações</span><div>${esc(r.observacoes)}</div></div>` : ''}
@@ -818,6 +836,11 @@ async function gerarRelatorio(f) {
     ${k('Contatos por dia', DEC.format(div0(T.contatos, T.dias)))}
     ${k('Ações', `${NUM.format(T.whatsapp + T.sms + T.ligacoes)}`, `WhatsApp ${NUM.format(T.whatsapp)} · SMS ${NUM.format(T.sms)} · Ligações ${NUM.format(T.ligacoes)}`)}
     ${k('Agendamentos', NUM.format(T.agendamentos))}
+  </div>
+  <div class="kpis">
+    ${k('Novos parcelamentos efetivados', NUM.format(T.novos_acordos || 0), 'pela data do pagamento', 'destaque')}
+    ${k('Valor regularizado', BRL.format(T.valor_acordos || 0), 'valor total dos novos acordos')}
+    ${k('Entradas dos novos acordos', BRL.format(T.entrada_acordos || 0), 'já incluídas no valor arrecadado')}
   </div>
   <div class="kpis">
     ${k('Cancelamento: aguardando envio', NUM.format(T.canc_aguardando || 0), 'na fila do próximo relatório de quinta')}
@@ -1023,6 +1046,7 @@ function baixarCsv() {
    ['Boletos gerados', T.boletos], ['Valor dos boletos gerados', n(T.valor_boletos || 0)], ['Contatos do período já pagos', T.pagos_contatos || 0], ['Pagamentos no período (data do pagamento)', T.pagos], ['Em andamento', T.andamento], ['Sem sucesso', T.revogados], ['Outros', T.outros], ['Sem situação', T.sem_situacao],
    ['Valor arrecadado (data do pagamento)', n(T.valor)], ['Parcelas pagas', T.parcelas], ['Conversão dos contatos (%)', n((div0(T.pagos_contatos, T.contatos) * 100).toFixed(1))],
    ['Efetividade boletos (%)', n((div0(T.pagos_contatos, T.boletos) * 100).toFixed(1))], ['Ticket médio', n(div0(T.valor, T.pagos).toFixed(2))],
+   ['Novos parcelamentos efetivados', T.novos_acordos || 0], ['Valor regularizado (total dos novos acordos)', n(T.valor_acordos || 0)], ['Entradas dos novos acordos (já no arrecadado)', n(T.entrada_acordos || 0)],
    ['Cancelamento: aguardando envio', T.canc_aguardando || 0], ['Encaminhados à Recuperação de Ativos', T.canc_enviados || 0],
    ['Acordos revogados pelo setor', T.canc_cancelados || 0], ['Não revogados pelo setor', T.canc_devolvidos || 0]].forEach(x => L.push(x));
   L.push([], [porDia ? 'Dia' : 'Mês', 'Contatos', 'Boletos', 'Pagamentos', 'Valor arrecadado']);
@@ -1100,7 +1124,25 @@ function tagVenc(r) {
 // ---------------------------------------------------------------- agendamentos vencidos
 // Caso ainda "em andamento" (ou sem situação) com data de agendamento já passada: conferir se a pessoa compareceu.
 // Situações de boleto (Confere vencimento) ficam de fora: elas já têm o aviso próprio.
-const codsAgend = () => S.situacoes.filter(s => s.categoria === 'Em andamento' && !s.confere_vencimento).map(s => s.codigo);
+const codsAgend = () => S.situacoes.filter(s => s.categoria === 'Em andamento' && !s.confere_vencimento && !s.confere_efetivacao).map(s => s.codigo);
+// ---------------------------------------------------------------- encaminhados para parcelamento
+// Situação com "Confere efetivação": a partir do dia seguinte à entrada na situação, conferir se o acordo foi efetivado.
+const codsEfet = () => S.situacoes.filter(s => s.confere_efetivacao).map(s => s.codigo);
+function statusEfet(r) {
+  if (!r || !r.situacao || !codsEfet().includes(r.situacao) || !r.situacao_desde) return null;
+  return r.situacao_desde < hoje() ? 'conferir' : 'aguardando';
+}
+function tagEfet(r) {
+  return statusEfet(r) === 'conferir' ? `<div><span class="tag Revogado">⚠ Encaminhado em ${fmtData(r.situacao_desde)} – conferir se o parcelamento foi efetivado</span></div>` : '';
+}
+async function buscarEfetivacoesAConferir(todos = false) {
+  const cods = codsEfet(); if (!cods.length) return [];
+  let q = sb.from('lancamentos').select('*').in('situacao', cods).lt('situacao_desde', hoje()).order('situacao_desde').limit(2000);
+  if (!todos) q = q.eq('funcionario_id', S.user.id);
+  const { data, error } = await q;
+  if (error) return [];
+  return (data || []).filter(r => statusEfet(r) === 'conferir');
+}
 function statusAgend(r) {   // 'conferir' | 'hoje' | 'futuro' | null
   if (!r || !r.agendamento) return null;
   if (r.situacao && !codsAgend().includes(r.situacao)) return null;
@@ -1138,11 +1180,12 @@ async function atualizarAvisoGlobal() {
   const box = $('#avisoGlobal'); if (!box) return;
   const msgs = [];
   // boletos vencidos do próprio usuário
-  const [meus, agend] = await Promise.all([buscarBoletosAConferir(false), buscarAgendamentosAConferir(false)]);
+  const [meus, agend, efet] = await Promise.all([buscarBoletosAConferir(false), buscarAgendamentosAConferir(false), buscarEfetivacoesAConferir(false)]);
   const link = document.querySelector('#menu a[data-rota="pendentes"]');
-  const nTot = meus.length + agend.length;
-  if (link) link.innerHTML = 'Pendentes' + (nTot ? ` <span class="badge" title="${meus.length} boleto(s) vencido(s) e ${agend.length} agendamento(s) vencido(s) para conferir">${nTot}</span>` : '');
+  const nTot = meus.length + agend.length + efet.length;
+  if (link) link.innerHTML = 'Pendentes' + (nTot ? ` <span class="badge" title="${meus.length} boleto(s) vencido(s), ${agend.length} agendamento(s) vencido(s) e ${efet.length} encaminhamento(s) para parcelamento a conferir">${nTot}</span>` : '');
   if (meus.length) msgs.push(`⚠ Você tem <strong>${meus.length}</strong> boleto(s) vencido(s) para conferir se foram pagos. <a href="#/pendentes?filtro=venc">Conferir agora</a>`);
+  if (efet.length) msgs.push(`📝 Você tem <strong>${efet.length}</strong> caso(s) encaminhado(s) para parcelamento. Confira se o novo acordo foi efetivado e atualize a situação. <a href="#/pendentes?filtro=efet">Conferir agora</a>`);
   if (agend.length) msgs.push(`📅 Você tem <strong>${agend.length}</strong> agendamento(s) cuja data já passou. Confira se a pessoa compareceu e atualize a situação. <a href="#/pendentes?filtro=agend">Conferir agora</a>`);
   // lembrete de quinta-feira (supervisão)
   if (ehSup()) {
@@ -1331,15 +1374,17 @@ async function telaAdmin() {
     <div class="tabela-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Ativo</th><th></th></tr></thead><tbody id="tbUsu"></tbody></table></div></div>
   <div class="card"><h2>Situações (resultado)</h2><p class="dica">A categoria define como a situação entra nos relatórios. <strong>Excluir</strong> só é possível para situações nunca usadas; as que já aparecem em lançamentos são <strong>desativadas</strong> (somem das listas, mas o histórico e os relatórios antigos continuam corretos).</p>
     <label class="check-linha"><input type="checkbox" id="verInativas"> Mostrar situações desativadas <span class="dica" id="qtdInativas"></span></label>
-    <div class="tabela-wrap"><table><thead><tr><th>Situação</th><th>Categoria</th><th>Quando usar</th><th class="num">Ordem</th><th>Gera cancelamento</th><th>Confere vencimento</th><th>Ativa</th><th class="num">Em uso</th><th></th></tr></thead><tbody id="tbSit"></tbody></table></div>
+    <div class="tabela-wrap"><table><thead><tr><th>Situação</th><th>Categoria</th><th>Quando usar</th><th class="num">Ordem</th><th>Gera cancelamento</th><th>Confere vencimento</th><th>Novo acordo</th><th>Confere efetivação</th><th>Ativa</th><th class="num">Em uso</th><th></th></tr></thead><tbody id="tbSit"></tbody></table></div>
     <form class="linha" id="fNovaSit" style="margin-top:.8rem">
       <label class="campo">Nova situação<input name="codigo" maxlength="60" required placeholder="EX.: SEM SUCESSO – FALECIDO"></label>
       <label class="campo">Categoria<select name="categoria">${CATEGORIAS.slice(0, 4).map(c => `<option value="${c}">${catNome(c)}</option>`).join('')}</select></label>
       <label class="campo" style="flex:1">Quando usar<input name="descricao" maxlength="200"></label>
       <label class="campo">Gera cancelamento<input type="checkbox" name="gera"></label>
       <label class="campo">Confere vencimento<input type="checkbox" name="confv"></label>
+      <label class="campo">Novo acordo<input type="checkbox" name="novo"></label>
+      <label class="campo">Confere efetivação<input type="checkbox" name="efet"></label>
       <button class="btn prim">Adicionar</button></form>
-    <p class="dica">"Gera cancelamento": ao escolher a situação, o caso entra automaticamente na fila do relatório semanal à Recuperação de Ativos. "Confere vencimento": o sistema avisa para conferir o pagamento ${PRAZO_UTEIS} dias úteis após o vencimento do boleto.</p></div>
+    <p class="dica">"Gera cancelamento": ao escolher a situação, o caso entra automaticamente na fila do relatório semanal à Recuperação de Ativos. "Confere vencimento": o sistema avisa para conferir o pagamento ${PRAZO_UTEIS} dias úteis após o vencimento do boleto. "Novo acordo": situação de novo parcelamento efetivado — libera os campos valor total e nº do novo parcelamento (use com a categoria "Pago"). "Confere efetivação": a partir do dia seguinte, o sistema avisa para conferir se o parcelamento foi efetivado.</p></div>
   <div class="card"><h2>Setores</h2><div class="tabela-wrap"><table><thead><tr><th>Setor</th><th class="num">Ordem</th><th>Ativo</th><th></th></tr></thead><tbody id="tbSet"></tbody></table></div>
     <form class="linha" id="fNovoSet" style="margin-top:.8rem"><label class="campo">Novo setor<input name="nome" maxlength="40" required></label><button class="btn prim">Adicionar</button></form></div>
   <div class="card"><h2>Auditoria (últimas 200 alterações)</h2><div class="tabela-wrap"><table><thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Tabela</th><th>Registro</th><th>Campos alterados</th></tr></thead><tbody id="tbAud"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody></table></div></div>`;
@@ -1371,14 +1416,16 @@ async function telaAdmin() {
     <td><input name="descricao" value="${esc(s.descricao || '')}" maxlength="200"></td><td class="num"><input name="ordem" type="number" value="${s.ordem}" style="width:5rem"></td>
     <td><input type="checkbox" name="gera" ${s.gera_cancelamento ? 'checked' : ''} aria-label="Gera cancelamento"></td>
     <td><input type="checkbox" name="confv" ${s.confere_vencimento ? 'checked' : ''} aria-label="Confere vencimento"></td>
+    <td><input type="checkbox" name="novo" ${s.novo_acordo ? 'checked' : ''} aria-label="Novo acordo"></td>
+    <td><input type="checkbox" name="efet" ${s.confere_efetivacao ? 'checked' : ''} aria-label="Confere efetivação"></td>
     <td><input type="checkbox" name="ativo" ${s.ativo ? 'checked' : ''} aria-label="Ativa"></td>
     <td class="num" title="Lançamentos com esta situação">${NUM.format(n)}</td>
     <td class="acoes-linha"><button class="btn peq" data-acao="salvar">Salvar</button>${n && !s.ativo ? '' : `<button class="btn peq perigo" data-acao="excluir" title="${n ? 'Em uso: será oferecida a desativação' : 'Excluir definitivamente'}">${n ? 'Desativar' : 'Excluir'}</button>`}</td></tr>`; }).join('')
-      || '<tr><td colspan="9" class="vazio">Nenhuma situação ativa.</td></tr>';
+      || '<tr><td colspan="11" class="vazio">Nenhuma situação ativa.</td></tr>';
     $$('tr[data-cod] button[data-acao=salvar]', tbS).forEach(b => b.addEventListener('click', async () => {
       const tr = b.closest('tr');
       const { error } = await sb.from('situacoes').update({ categoria: tr.querySelector('[name=categoria]').value, descricao: tr.querySelector('[name=descricao]').value.trim() || null,
-        ordem: Number(tr.querySelector('[name=ordem]').value) || 100, gera_cancelamento: tr.querySelector('[name=gera]').checked, confere_vencimento: tr.querySelector('[name=confv]').checked, ativo: tr.querySelector('[name=ativo]').checked }).eq('codigo', tr.dataset.cod);
+        ordem: Number(tr.querySelector('[name=ordem]').value) || 100, gera_cancelamento: tr.querySelector('[name=gera]').checked, confere_vencimento: tr.querySelector('[name=confv]').checked, novo_acordo: tr.querySelector('[name=novo]').checked, confere_efetivacao: tr.querySelector('[name=efet]').checked, ativo: tr.querySelector('[name=ativo]').checked }).eq('codigo', tr.dataset.cod);
       if (error) return toast(msgErro(error), true); toast('Situação atualizada.'); await carregarTabelas(); desenharSit();
     }));
     $$('tr[data-cod] button[data-acao=excluir]', tbS).forEach(b => b.addEventListener('click', async () => {
@@ -1402,7 +1449,7 @@ async function telaAdmin() {
   desenharSit();
   $('#fNovaSit').addEventListener('submit', async e => {
     e.preventDefault(); const f = e.target;
-    const { error } = await sb.from('situacoes').insert({ codigo: f.codigo.value.trim().toUpperCase().replace(/\s+-\s+/g, ' – '), categoria: f.categoria.value, descricao: f.descricao.value.trim() || null, ordem: 90, gera_cancelamento: f.gera.checked, confere_vencimento: f.confv.checked });
+    const { error } = await sb.from('situacoes').insert({ codigo: f.codigo.value.trim().toUpperCase().replace(/\s+-\s+/g, ' – '), categoria: f.categoria.value, descricao: f.descricao.value.trim() || null, ordem: 90, gera_cancelamento: f.gera.checked, confere_vencimento: f.confv.checked, novo_acordo: f.novo.checked, confere_efetivacao: f.efet.checked });
     if (error) return toast(msgErro(error), true); toast('Situação criada.'); telaAdmin();
   });
   // setores
