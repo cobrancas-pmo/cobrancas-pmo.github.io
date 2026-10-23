@@ -356,8 +356,7 @@ async function telaLancar(params) {
   <div class="card"><div class="cab"><h2>Contatos de ${fmtData(dia)}</h2><span class="dica" id="qtdDia"></span></div>
     <div class="tabela-wrap"><table><thead><tr>
       <th>Nº</th><th>Id parc.</th><th>Setor</th><th>Ações</th><th>Boleto</th><th>Situação</th><th class="num">Valor</th><th>Observações</th><th></th>
-    </tr></thead><tbody id="tbDia"><tr><td colspan="9" class="vazio">Carregando…</td></tr></tbody></table></div></div>
-  <div id="recebidoDia"></div>`;
+    </tr></thead><tbody id="tbDia"><tr><td colspan="9" class="vazio">Carregando…</td></tr></tbody></table></div></div>`;
 
   const irDia = d => { location.hash = `#/lancar?data=${d}`; };
   $('#dia').addEventListener('change', e => e.target.value && irDia(e.target.value));
@@ -471,35 +470,16 @@ async function verificarDuplicado(f) {
 }
 
 async function carregarDia(dia) {
-  // contatos do dia (data do contato) + pagamentos registrados no dia (data do pagamento, inclusive de contatos anteriores)
-  const [{ data, error }, { data: pagDia }] = await Promise.all([
-    sb.from('lancamentos').select('*').eq('funcionario_id', S.user.id).eq('data_contato', dia).order('id'),
-    sb.from('lancamentos').select('*').eq('funcionario_id', S.user.id).eq('data_pagamento', dia).order('data_contato').order('id')
-  ]);
+  const { data, error } = await sb.from('lancamentos').select('*').eq('funcionario_id', S.user.id).eq('data_contato', dia).order('id');
   const tb = $('#tbDia'); if (!tb) return;
-  const recebidos = (pagDia || []).filter(r => catDe(r.situacao) === 'Pago');
-  const totRec = recebidos.reduce((a, r) => a + Number(r.valor_pago || 0), 0);
-  const boxRec = $('#recebidoDia');
-  if (boxRec) boxRec.innerHTML = `<div class="card"><div class="cab"><h2>Recebido em ${fmtData(dia)} <span class="dica">(pela data do pagamento)</span></h2><span class="dica">${recebidos.length} pagamento(s) · ${BRL.format(totRec)}</span></div>
-    <p class="dica">Pagamentos com data de pagamento neste dia, inclusive de contatos feitos em dias anteriores. É este valor que conta como arrecadado no dia nos Relatórios.</p>
-    ${recebidos.length ? `<div class="tabela-wrap"><table><thead><tr><th>Id parc.</th><th>Data do contato</th><th>Setor</th><th>Situação</th><th>Boleto</th><th class="num">Valor pago</th><th></th></tr></thead><tbody>
-    ${recebidos.map(r => `<tr><td><strong>${esc(r.id_parcelamento)}</strong>${r.origem ? `<div class="dica">Origem ${esc(r.origem)}</div>` : ''}</td>
-      <td>${fmtData(r.data_contato)}${r.data_contato === dia ? ' <span class="dica">(contato deste dia)</span>' : ''}</td><td>${esc(r.setor || '')}</td>
-      <td><div class="dica">${esc(r.situacao || '')}</div></td>
-      <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) : ''}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${r.parcelas ? `<div class="dica">${r.parcelas} parc.</div>` : ''}</td>
-      <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : '<span class="dica">sem valor</span>'}</td>
-      <td><a class="btn peq" href="#/lancar?data=${r.data_contato}&editar=${r.id}">Abrir</a></td></tr>`).join('')}
-    <tr class="total"><td colspan="5">Total recebido no dia</td><td class="num">${BRL.format(totRec)}</td><td></td></tr>
-    </tbody></table></div>` : '<p class="vazio">Nenhum pagamento registrado com data de pagamento neste dia.</p>'}</div>`;
   if (error) { tb.innerHTML = `<tr><td colspan="9" class="vazio">${esc(msgErro(error))}</td></tr>`; return; }
   const rows = data || [];
   const cont = c => rows.filter(r => catDe(r.situacao) === c).length;
   const valor = rows.filter(r => catDe(r.situacao) === 'Pago').reduce((a, r) => a + Number(r.valor_pago || 0), 0);
   $('#resumoDia').innerHTML = [
     ['Contatos', rows.length], ['Boletos', rows.filter(r => r.boleto_emitido).length], ['Pagos', cont('Pago')],
-    ['Em andamento', cont('Em andamento')], ['Sem sucesso', cont('Revogado')], ['Sem situação', cont('Sem situação')], ['Valor pago (contatos do dia)', BRL.format(valor)],
-    ['Recebido no dia', BRL.format(totRec), `pela data do pagamento · ${recebidos.length} pagamento(s)`, 'destaque']
-  ].map(([r, v, d, c]) => `<div class="kpi ${c || ''}"><div class="rot">${r}</div><div class="val">${typeof v === 'number' ? NUM.format(v) : v}</div>${d ? `<div class="det">${d}</div>` : ''}</div>`).join('');
+    ['Em andamento', cont('Em andamento')], ['Sem sucesso', cont('Revogado')], ['Sem situação', cont('Sem situação')], ['Valor pago (contatos do dia)', BRL.format(valor)]
+  ].map(([r, v]) => `<div class="kpi"><div class="rot">${r}</div><div class="val">${typeof v === 'number' ? NUM.format(v) : v}</div></div>`).join('');
   $('#qtdDia').textContent = `${rows.length} contato(s)`;
   if (!rows.length) { tb.innerHTML = '<tr><td colspan="9" class="vazio">Nenhum contato lançado neste dia.</td></tr>'; return; }
   tb.innerHTML = rows.map((r, i) => {
