@@ -312,8 +312,19 @@ function optSituacoes(sel) {
   }).join('');
 }
 
+// A data do contato fica na tela; se a aba ficar aberta de um dia para o outro (ou se a tela veio de um
+// link "Editar" de outro dia), os lançamentos novos herdariam a data antiga. Estes controles evitam isso.
+let checarDiaLancar = null;
+setInterval(() => checarDiaLancar && checarDiaLancar(), 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && checarDiaLancar) checarDiaLancar(); });
+window.addEventListener('focus', () => checarDiaLancar && checarDiaLancar());
+
 async function telaLancar(params) {
   const dia = /^\d{4}-\d{2}-\d{2}$/.test(params.data || '') ? params.data : hoje();
+  // "automático" = a tela foi aberta no dia de hoje (sem data escolhida ou pelo botão Hoje): acompanha a virada do dia
+  const diaAuto = !params.editar && dia === hoje();
+  let confirmouDia = false;   // lançar em data diferente de hoje: confirma uma vez por tela
+  checarDiaLancar = null;
   if (ehAdmin() && params.editar) {   // ao abrir lançamento de outra pessoa, a tela passa a mostrar o dia dela
     const { data: reg } = await sb.from('lancamentos').select('funcionario_id').eq('id', params.editar).maybeSingle();
     if (reg) S.lancarComo = reg.funcionario_id === S.user.id ? null : reg.funcionario_id;
@@ -333,6 +344,7 @@ async function telaLancar(params) {
     </div>
   </div>
   ${outro ? `<div class="aviso atencao aviso-como">Você está vendo e lançando em nome de <strong>${esc(nomePerfil(alvo))}</strong>. Os lançamentos novos contarão na produção dela(e); a auditoria registra que foram feitos por você. <a href="#" id="voltarMim">Voltar para os meus lançamentos</a></div>` : ''}
+  <div id="avisoData" aria-live="polite"></div>
   <div class="kpis mini" id="resumoDia"></div>
   <form class="card" id="fLanc" novalidate autocomplete="off">
     <div class="cab"><h2 id="tituloForm">Novo lançamento</h2><span class="dica">Campos com * são obrigatórios</span></div>
@@ -394,7 +406,22 @@ async function telaLancar(params) {
   if ($('#voltarMim')) $('#voltarMim').addEventListener('click', e => { e.preventDefault(); S.lancarComo = null; location.hash = `#/lancar?data=${dia}`; if (!params.editar) telaLancar({ data: dia }); });
 
   const f = $('#fLanc');
-  const ajustarMeio = () => { const ok = aceitaMeio(f.situacao.value); f.meio_acordo.disabled = !ok; if (!ok) f.meio_acordo.value = ''; };
+  const formVazio = () => !f.registro.value && !f.id_parcelamento.value.trim() && !f.observacoes.value.trim();
+  const mostrarAvisoData = () => {
+    const box = $('#avisoData'); if (!box) return;
+    const h = hoje();
+    box.innerHTML = dia === h ? '' : `<div class="aviso atencao aviso-data">
+      <strong>Atenção à data:</strong> esta tela está em <strong>${fmtData(dia)} (${diaSemana(dia)})</strong>, e hoje é ${fmtData(h)}.
+      Lançamentos novos serão gravados com a data ${fmtData(dia)}. <a href="#/lancar?data=${h}" id="irHojeAviso">Ir para hoje</a></div>`;
+  };
+  checarDiaLancar = () => {
+    if (!$('#fLanc')) { checarDiaLancar = null; return; }   // saiu da tela Lançar
+    // o dia virou com a tela aberta: se estava acompanhando "hoje" e não há nada sendo digitado, muda sozinha
+    if (diaAuto && dia !== hoje() && formVazio()) { irDia(hoje()); return; }
+    mostrarAvisoData();
+  };
+  mostrarAvisoData();
+  const ajustarMeio =() => { const ok = aceitaMeio(f.situacao.value); f.meio_acordo.disabled = !ok; if (!ok) f.meio_acordo.value = ''; };
   // tipo de acordo: mostra os campos de boleto ou de novo parcelamento
   const tipoAtual = () => (f.querySelector('[name=tipo_acordo]:checked') || {}).value || '';
   const setTipo = t => { const r = f.querySelector(`[name=tipo_acordo][value="${t}"]`); if (r) r.checked = true; $('#fsAcordo').dataset.tipo = t === 'Boleto' ? 'boleto' : t ? 'parc' : ''; };
@@ -461,13 +488,28 @@ async function telaLancar(params) {
     }
     if (/\b\d{2}\s?9?\d{4}-?\d{4}\b|\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/.test(o.observacoes || '') &&
         !confirm('As observações parecem conter telefone ou CPF. Dados pessoais não devem ser registrados aqui. Salvar mesmo assim?')) return;
-    const b = $('#btnSalvar'); b.disabled = true;
     const id = f.registro.value;
+    // data do contato de um lançamento novo: confere com a data de hoje no momento de salvar
+    const h = hoje();
+    let dataGravar = dia;
+    if (!id && dia !== h) {
+      if (diaAuto) dataGravar = h;   // a tela foi aberta "hoje" e o dia virou: grava na data atual
+      else if (!confirmouDia) {
+        if (!confirm(`Este lançamento será gravado com a data ${fmtData(dia)} (${diaSemana(dia)}), e não com a data de hoje (${fmtData(h)}).\n\nOK = gravar em ${fmtData(dia)} (contato feito naquele dia)\nCancelar = voltar (use o botão "Hoje" para lançar na data de hoje)`)) return;
+        confirmouDia = true;
+      }
+    }
+    const b = $('#btnSalvar'); b.disabled = true;
     const r = id ? await sb.from('lancamentos').update(o).eq('id', id)
-                 : await sb.from('lancamentos').insert({ ...o, data_contato: dia, ...(outro ? { funcionario_id: alvo } : {}) });
+                 : await sb.from('lancamentos').insert({ ...o, data_contato: dataGravar, ...(outro ? { funcionario_id: alvo } : {}) });
     b.disabled = false;
     if (r.error) return toast(msgErro(r.error), true);
-    toast(id ? 'Lançamento atualizado.' : (outro ? `Lançamento salvo em nome de ${nomePerfil(alvo)}.` : 'Lançamento salvo.')); atualizarAvisoGlobal();
+    atualizarAvisoGlobal();
+    if (dataGravar !== dia) {   // o dia virou: leva a tela para hoje, onde o lançamento aparece
+      toast(`O dia mudou: lançamento salvo com a data de hoje (${fmtData(dataGravar)}).`);
+      irDia(dataGravar); return;
+    }
+    toast(id ? 'Lançamento atualizado.' : (outro ? `Lançamento salvo em nome de ${nomePerfil(alvo)}.` : 'Lançamento salvo.'));
     limpar(); await carregarDia(dia); f.id_parcelamento.focus();
   });
 
