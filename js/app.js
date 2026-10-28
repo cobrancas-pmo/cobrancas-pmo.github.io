@@ -1292,7 +1292,11 @@ async function telaCancelamentos(params) {
       </div>
       <p class="dica">Ao gerar, os casos marcados recebem o número do lote e passam para "Enviado". Cada caso só pode ir em um lote.</p></div>
     <div class="card"><div class="cab"><h2>Aguardando resposta da Recuperação de Ativos</h2><span class="dica" id="qtdResp"></span></div>
-      <p class="dica">Casos já enviados. Quando o setor responder, registre aqui se o acordo foi revogado ou não.</p>
+      <p class="dica">Casos já enviados. Quando o setor responder, registre aqui se o acordo foi revogado ou não — caso a caso, ou todos de uma vez.</p>
+      <div class="linha resp-massa" id="respMassa" hidden>
+        <label class="campo">Aplicar a<select id="loteMassa"></select></label>
+        <button class="btn" type="button" id="btnRevogarTodos">Marcar todos como "Acordo revogado"</button>
+      </div>
       <div class="tabela-wrap"><table><thead><tr><th>Lote</th><th>Enviado em</th><th class="num">Dias</th><th>Id parc.</th><th>Setor</th><th>Funcionário</th><th></th></tr></thead>
       <tbody id="tbResp"></tbody></table></div></div>
     <div class="card"><details id="detRet"><summary><strong>Retirados da fila</strong> <span class="dica" id="qtdRet"></span></summary>
@@ -1363,6 +1367,25 @@ async function telaCancelamentos(params) {
       <td><strong>${esc(r.id_parcelamento)}</strong></td><td>${esc(r.setor || '')}</td><td>${esc(nomes[r.funcionario_id] || '—')}</td>
       <td><div class="acoes"><button class="btn peq" data-resp="Cancelado" data-id="${r.id}">Acordo revogado</button><button class="btn peq" data-resp="Devolvido" data-id="${r.id}">Não revogado</button></div></td></tr>`; }).join('')
     || '<tr><td colspan="7" class="vazio">Nenhum caso aguardando resposta.</td></tr>';
+  // resposta em massa: todos os casos aguardando (ou só os de um lote)
+  if (RS.length) {
+    const porLote = {}; RS.forEach(r => { porLote[r.cancelamento_lote] = (porLote[r.cancelamento_lote] || 0) + 1; });
+    const lotesIds = Object.keys(porLote);
+    $('#loteMassa').innerHTML = `<option value="">Todos os casos da lista (${RS.length})</option>` +
+      (lotesIds.length > 1 ? lotesIds.map(id => `<option value="${id}">Só o lote ${esc((LT[id] || {}).numero || id)} (${porLote[id]})</option>`).join('') : '');
+    $('#respMassa').hidden = false;
+    $('#btnRevogarTodos').addEventListener('click', async () => {
+      const lote = $('#loteMassa').value;
+      const alvo = RS.filter(r => !lote || String(r.cancelamento_lote) === lote);
+      if (!alvo.length) return;
+      const onde = lote ? `do lote ${(LT[lote] || {}).numero || lote}` : 'da lista';
+      if (!confirm(`Marcar ${alvo.length} caso(s) ${onde} como "Acordo revogado"?\n\nUse somente se a Recuperação de Ativos confirmou a revogação de todos eles. Cada caso ainda pode ser corrigido depois, um a um, pela página do lote.`)) return;
+      const b = $('#btnRevogarTodos'); b.disabled = true; b.textContent = 'Registrando…';
+      const { data: qtd, error } = await sb.rpc('atualizar_cancelamento_varios', { p_ids: alvo.map(r => r.id), p_status: 'Cancelado', p_obs: null });
+      if (error) { b.disabled = false; b.textContent = 'Marcar todos como "Acordo revogado"'; return toast(msgErro(error), true); }
+      toast(`${qtd} acordo(s) marcados como revogados.`); telaCancelamentos({});
+    });
+  }
   $$('#tbResp [data-resp]').forEach(b => b.addEventListener('click', async () => {
     let obs = null;
     if (b.dataset.resp === 'Devolvido') { obs = prompt('Motivo informado pelo setor para não revogar (opcional):'); if (obs === null) return; }

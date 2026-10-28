@@ -284,3 +284,7 @@ tr.linha-pendente td:first-child { box-shadow: inset 4px 0 0 var(--warn); }
 #fsAcordo[data-tipo="parc"] .dica.rot-parc { display: block; }
 #fsAcordo[data-tipo="boleto"] .campo-parcelas { order: 13; }
 #fsAcordo[data-tipo="parc"] .campo-parcelas { order: 4; }
+
+/* cancelamentos: resposta em massa */
+.resp-massa { margin: .2rem 0 .8rem; }
+.resp-massa .campo { min-width: 15rem; }
