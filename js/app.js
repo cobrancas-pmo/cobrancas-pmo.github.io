@@ -62,7 +62,8 @@ function msgErro(e) {
     [/row-level security|permission denied/i, 'Você não tem permissão para esta ação.'],
     [/lancamentos_id_parcelamento_check/i, 'Id do parcelamento inválido: use apenas números/letras, sem espaços (nada de nomes).'],
     [/lancamentos_origem_check/i, 'Origem/inscrição inválida: use apenas números/letras, sem espaços.'],
-    [/lancamentos_meio_acordo_check/i, 'Meio que gerou o acordo inválido.'],
+    [/lancamentos_meio_acordo_check/i, '"Onde o acordo foi fechado" inválido.'],
+    [/lancamentos_entrega_boleto_check/i, '"Boleto entregue por" inválido.'],
     [/lancamentos_novo_parcelamento_check/i, 'Nº do novo parcelamento inválido: use apenas números/letras, sem espaços.'],
     [/lancamentos_valor_acordo_check/i, 'Valor total do acordo inválido.'],
     [/lancamentos_tipo_acordo_check/i, 'Tipo de acordo inválido.'],
@@ -91,7 +92,7 @@ const ehAdmin = () => S.perfil && S.perfil.papel === 'admin';
 const alvoLancar = () => (ehAdmin() && S.lancarComo) || S.user.id;
 const nomePerfil = id => (id === S.user.id ? S.perfil.nome : (S.perfis.find(p => p.id === id)?.nome || 'outro atendente'));
 const catDe = cod => (cod ? (S.situacoes.find(s => s.codigo === cod)?.categoria || 'Outros') : 'Sem situação');
-// "Meio que gerou o acordo" só faz sentido quando houve pagamento ou boleto/acordo em aberto
+// "Onde o acordo foi fechado" (meio_acordo) só faz sentido quando houve pagamento ou boleto/acordo em aberto
 const sitNovoAcordo = cod => !!cod && !!S.situacoes.find(s => s.codigo === cod && s.novo_acordo);
 const aceitaMeio = cod => catDe(cod) === 'Pago' || sitConfere(cod);
 const app = () => $('#app');
@@ -378,13 +379,14 @@ async function telaLancar(params) {
         <label class="campo com-tipo" style="order:11"><span class="rot-boleto">Emitido em</span><span class="rot-parc">Emitida em</span><input type="date" name="boleto_emitido"></label>
         <label class="campo com-tipo" style="order:12">Vencimento<input type="date" name="boleto_vencimento"><span class="dica rot-parc">Gera o aviso para conferir o pagamento</span></label>
         <label class="campo com-tipo" style="order:14"><span class="rot-boleto">Valor do boleto (R$)</span><span class="rot-parc">Valor da 1ª parcela (R$)</span><input name="valor_boleto" inputmode="decimal" placeholder="0,00"></label>
+        <label class="campo com-tipo" style="order:15"><span class="rot-boleto">Boleto entregue por</span><span class="rot-parc">1ª parcela entregue por</span><select name="entrega_boleto"><option>WhatsApp</option><option>Pessoalmente (Poupatempo)</option></select></label>
       </div>
     </fieldset>
     <fieldset><legend>Resultado</legend><div class="grade">
       <label class="campo largo">Situação<select name="situacao">${optSituacoes()}</select><span class="dica" id="descSit"></span></label>
       <label class="campo">Valor pago (R$)<input name="valor_pago" inputmode="decimal" placeholder="0,00"></label>
       <label class="campo">Data do pagamento<input type="date" name="data_pagamento"></label>
-      <label class="campo" id="cMeio">Meio que gerou o acordo<select name="meio_acordo" disabled>${optList(OPC.meio_acordo)}</select><span class="dica">Para pagos e boletos em aberto</span></label>
+      <label class="campo" id="cMeio">Onde o acordo foi fechado<select name="meio_acordo" disabled>${optList(OPC.meio_acordo)}</select><span class="dica">O contato em que o contribuinte aceitou pagar — não é por onde o boleto foi enviado</span></label>
       <label class="campo largo">Observações <span class="dica">— não escreva nome, CPF ou telefone do contribuinte</span><textarea name="observacoes" maxlength="500"></textarea></label>
     </div></fieldset>
     <div class="acoes">
@@ -424,7 +426,7 @@ async function telaLancar(params) {
   const ajustarMeio =() => { const ok = aceitaMeio(f.situacao.value); f.meio_acordo.disabled = !ok; if (!ok) f.meio_acordo.value = ''; };
   // tipo de acordo: mostra os campos de boleto ou de novo parcelamento
   const tipoAtual = () => (f.querySelector('[name=tipo_acordo]:checked') || {}).value || '';
-  const setTipo = t => { const r = f.querySelector(`[name=tipo_acordo][value="${t}"]`); if (r) r.checked = true; $('#fsAcordo').dataset.tipo = t === 'Boleto' ? 'boleto' : t ? 'parc' : ''; };
+  const setTipo = t => { const r = f.querySelector(`[name=tipo_acordo][value="${t}"]`); if (r) r.checked = true; $('#fsAcordo').dataset.tipo = t === 'Boleto' ? 'boleto' : t ? 'parc' : ''; if (t && !f.entrega_boleto.value) f.entrega_boleto.value = 'WhatsApp'; };
   f._setTipo = setTipo;
   f.querySelectorAll('[name=tipo_acordo]').forEach(r => r.addEventListener('change', () => setTipo(tipoAtual())));
   f._ajustarMeio = ajustarMeio;
@@ -452,11 +454,11 @@ async function telaLancar(params) {
       valor_pago: parseValor(f.valor_pago.value), data_pagamento: f.data_pagamento.value || null, observacoes: f.observacoes.value.trim() || null,
       meio_acordo: f.meio_acordo.value || null,
       valor_acordo: parseValor(f.valor_acordo.value), novo_parcelamento: f.novo_parcelamento.value.trim() || null,
-      tipo_acordo: tipoAtual() || null
+      tipo_acordo: tipoAtual() || null, entrega_boleto: f.entrega_boleto.value || null
     };
     if (!aceitaMeio(o.situacao)) o.meio_acordo = null;
     if (sitNovoAcordo(o.situacao) && o.tipo_acordo !== 'Novo parcelamento') o.tipo_acordo = 'Novo parcelamento';
-    if (!o.tipo_acordo) { o.boleto_emitido = o.boleto_vencimento = null; o.parcelas = null; o.valor_boleto = null; }
+    if (!o.tipo_acordo) { o.boleto_emitido = o.boleto_vencimento = null; o.parcelas = null; o.valor_boleto = null; o.entrega_boleto = null; }
     if (o.tipo_acordo !== 'Novo parcelamento') { o.valor_acordo = null; o.novo_parcelamento = null; }
     const ehParc = o.tipo_acordo === 'Novo parcelamento';
     if (Number.isNaN(o.valor_acordo)) return toast('Valor total do acordo inválido. Exemplo: 2.400,50', true);
@@ -534,6 +536,7 @@ function editar(l) {
   f.data_pagamento.value = l.data_pagamento || '';
   f.meio_acordo.disabled = !aceitaMeio(l.situacao);
   f.valor_acordo.value = fmtValorInput(l.valor_acordo); f.novo_parcelamento.value = l.novo_parcelamento || '';
+  f.entrega_boleto.value = l.entrega_boleto || 'WhatsApp';
   f._setTipo(l.tipo_acordo || (l.valor_acordo != null || l.novo_parcelamento || sitNovoAcordo(l.situacao) ? 'Novo parcelamento' : (l.boleto_emitido || l.boleto_vencimento || l.valor_boleto != null ? 'Boleto' : '')));
   f._wppConferido = null;
   const dono = l.funcionario_id !== S.user.id ? ` (lançamento de ${S.perfis.find(p => p.id === l.funcionario_id)?.nome || 'outro funcionário'})` : '';
@@ -725,7 +728,7 @@ async function telaBuscar(params = {}) {
     return `<tr class="linha-detalhe" data-det-de="${r.id}"><td colspan="${colsN}"><div class="detalhe-grade">
       ${c('Fonte do contato', esc(r.fonte_contato))}${c('WhatsApp', esc(r.whatsapp))}${c('SMS', esc(r.sms))}${c('Ligação', esc(r.ligacao))}${c('Agendamento', fmtData(r.agendamento))}
       ${c('Tipo de acordo', esc(r.tipo_acordo))}${c(r.tipo_acordo === 'Novo parcelamento' ? '1ª parcela emitida em' : 'Boleto emitido em', fmtData(r.boleto_emitido))}${c('Vencimento', fmtData(r.boleto_vencimento))}${c('Nº de parcelas', r.parcelas)}${c('Valor do boleto', r.valor_boleto != null ? BRL.format(r.valor_boleto) : '')}
-      ${c('Situação', esc(r.situacao || '(sem situação)'))}${c('Valor pago', r.valor_pago != null ? BRL.format(r.valor_pago) : '')}${c('Data do pagamento', fmtData(r.data_pagamento))}${c('Meio que gerou o acordo', esc(r.meio_acordo))}
+      ${c('Situação', esc(r.situacao || '(sem situação)'))}${c('Valor pago', r.valor_pago != null ? BRL.format(r.valor_pago) : '')}${c('Data do pagamento', fmtData(r.data_pagamento))}${c('Onde o acordo foi fechado', esc(r.meio_acordo))}${c(r.tipo_acordo === 'Novo parcelamento' ? '1ª parcela entregue por' : 'Boleto entregue por', esc(r.entrega_boleto))}
       ${c('Valor total do novo acordo', r.valor_acordo != null ? BRL.format(r.valor_acordo) : '')}${c('Nº do novo parcelamento', esc(r.novo_parcelamento))}${c('Na situação atual desde', fmtData(r.situacao_desde))}
       ${c('Cancelamento', r.cancelamento_status ? esc(cancNome(r.cancelamento_status)) : '')}${c('Retorno do setor', esc(r.cancelamento_obs))}
       ${c('Atendente', esc(nomes[r.funcionario_id] || (r.funcionario_id === S.user.id ? S.perfil.nome : '—')))}${r.criado_por && r.criado_por !== r.funcionario_id ? c('Lançado por', esc(nomePerfil(r.criado_por)) + ' (em nome do atendente)') : ''}${c('Criado em', r.criado_em ? new Date(r.criado_em).toLocaleString('pt-BR') : '')}${c('Última alteração', r.atualizado_em ? new Date(r.atualizado_em).toLocaleString('pt-BR') : '')}
@@ -853,6 +856,11 @@ async function gerarRelatorio(f) {
   const [{ data: R, error }, { data: E, error: errE }] = await Promise.all([sb.rpc('relatorio', args), sb.rpc('relatorio_eficacia', args)]);
   if (error) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(error))}</div>`; return; }
   ULTIMO = { R, p, nomeFunc, E: errE ? null : E };
+  // entregas pessoalmente (boletos/1ª parcela dos contatos do período)
+  let qE = sb.from('lancamentos').select('id', { count: 'exact', head: true }).eq('entrega_boleto', 'Pessoalmente (Poupatempo)').gte('data_contato', p.ini).lte('data_contato', p.fim);
+  if (func) qE = qE.eq('funcionario_id', func); else if (!ehSup()) qE = qE.eq('funcionario_id', S.user.id);
+  const { count: nPessoal } = await qE;
+  ULTIMO.entreguesPessoalmente = nPessoal || 0;
   destruirGraficos();
   const T = R.totais;
   const k = (rot, val, det = '', cls = '') => `<div class="kpi ${cls}"><div class="rot">${rot}</div><div class="val">${val}</div>${det ? `<div class="det">${det}</div>` : ''}</div>`;
@@ -883,7 +891,7 @@ async function gerarRelatorio(f) {
     ${alertas.map(a => `<div class="aviso atencao">${esc(a)}</div>`).join('')}</div>
   <div class="kpis">
     ${k('Contatos realizados', NUM.format(T.contatos), `${NUM.format(T.dias)} dia(s) trabalhado(s)`, 'destaque')}
-    ${k('Boletos gerados', NUM.format(T.boletos), T.valor_boletos ? `${BRL.format(T.valor_boletos)} em boletos` : '')}
+    ${k('Boletos gerados', NUM.format(T.boletos), [T.valor_boletos ? `${BRL.format(T.valor_boletos)} em boletos` : '', ULTIMO.entreguesPessoalmente ? `${NUM.format(ULTIMO.entreguesPessoalmente)} entregue(s) pessoalmente` : ''].filter(Boolean).join(' · '))}
     ${k('Pagamentos no período', NUM.format(T.pagos), `pela data do pagamento · ${NUM.format(T.parcelas)} parcela(s)`)}
     ${k('Em andamento', NUM.format(T.andamento))}
     ${k('Sem sucesso', NUM.format(T.revogados))}
@@ -1084,8 +1092,8 @@ function desenharEficacia(E, { css, barra, eixos }) {
     <div class="card"><h3>Qualidade das fontes de telefone</h3><p class="dica">"Contato falho" = número errado ou sem WhatsApp.</p><div class="tabela-wrap"><table><thead><tr><th>Fonte</th><th class="num">Contatos</th><th class="num">Resposta</th><th class="num">Contato falho</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Valor</th></tr></thead><tbody>
       ${E.por_fonte.map(x => `<tr><td>${esc(x.fonte)}${peq(x.contatos)}</td><td class="num">${NUM.format(x.contatos)}</td><td class="num">${conv(x.respondeu, x.contatos)}</td><td class="num">${conv(x.contato_falho, x.contatos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num"><strong>${conv(x.pagos, x.contatos)}</strong></td><td class="num">${BRL.format(x.valor)}</td></tr>`).join('') || vazio(7)}
     </tbody></table></div></div>
-    <div class="card"><h3>Meio que gerou o acordo</h3><p class="dica">Informado pelo funcionário no lançamento. ${NUM.format(T.pagos_com_meio)} de ${NUM.format(T.pagos)} pagamento(s) com o meio informado.</p><div class="tabela-wrap"><table><thead><tr><th>Meio</th><th class="num">Acordos</th><th class="num">Já pagos</th><th class="num">Valor</th><th class="num">Tempo até pagar</th></tr></thead><tbody>
-      ${E.meio_acordo.map(x => `<tr><td>${esc(x.meio)}${peq(x.acordos)}</td><td class="num">${NUM.format(x.acordos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num">${BRL.format(x.valor)}</td><td class="num">${dias(x.dias_medio)}</td></tr>`).join('') || vazio(5, 'Nenhum lançamento com o campo "Meio que gerou o acordo" preenchido.')}
+    <div class="card"><h3>Onde o acordo foi fechado</h3><p class="dica">Informado pelo funcionário no lançamento. ${NUM.format(T.pagos_com_meio)} de ${NUM.format(T.pagos)} pagamento(s) com o meio informado.</p><div class="tabela-wrap"><table><thead><tr><th>Meio</th><th class="num">Acordos</th><th class="num">Já pagos</th><th class="num">Valor</th><th class="num">Tempo até pagar</th></tr></thead><tbody>
+      ${E.meio_acordo.map(x => `<tr><td>${esc(x.meio)}${peq(x.acordos)}</td><td class="num">${NUM.format(x.acordos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num">${BRL.format(x.valor)}</td><td class="num">${dias(x.dias_medio)}</td></tr>`).join('') || vazio(5, 'Nenhum lançamento com o campo "Onde o acordo foi fechado" preenchido.')}
     </tbody></table></div></div>
   </div>
   <div class="card"><h3>Conversão por setor e meio</h3><p class="dica">Em cada célula: conversão (pagos/contatos que usaram o meio naquele setor).</p><div class="tabela-wrap"><table><thead><tr><th>Setor</th>${colMeios.map(m => `<th class="num">${m}</th>`).join('')}</tr></thead><tbody>
@@ -1116,7 +1124,7 @@ function baixarCsv() {
   L.push(['Relatório de cobranças', p.rotulo], ['Funcionário', nomeFunc], ['Período', `${fmtData(p.ini)} a ${fmtData(p.fim)}`], []);
   L.push(['Indicador', 'Valor']);
   [['Contatos', T.contatos], ['Dias trabalhados', T.dias], ['WhatsApp', T.whatsapp], ['SMS', T.sms], ['Ligações', T.ligacoes], ['Agendamentos', T.agendamentos],
-   ['Boletos gerados', T.boletos], ['Valor dos boletos gerados', n(T.valor_boletos || 0)], ['Contatos do período já pagos', T.pagos_contatos || 0], ['Pagamentos no período (data do pagamento)', T.pagos], ['Em andamento', T.andamento], ['Sem sucesso', T.revogados], ['Outros', T.outros], ['Sem situação', T.sem_situacao],
+   ['Boletos gerados', T.boletos], ['Boletos entregues pessoalmente (Poupatempo)', ULTIMO.entreguesPessoalmente || 0], ['Valor dos boletos gerados', n(T.valor_boletos || 0)], ['Contatos do período já pagos', T.pagos_contatos || 0], ['Pagamentos no período (data do pagamento)', T.pagos], ['Em andamento', T.andamento], ['Sem sucesso', T.revogados], ['Outros', T.outros], ['Sem situação', T.sem_situacao],
    ['Valor arrecadado (data do pagamento)', n(T.valor)], ['Parcelas pagas', T.parcelas], ['Conversão dos contatos (%)', n((div0(T.pagos_contatos, T.contatos) * 100).toFixed(1))],
    ['Efetividade boletos (%)', n((div0(T.pagos_contatos, T.boletos) * 100).toFixed(1))], ['Ticket médio', n(div0(T.valor, T.pagos).toFixed(2))],
    ['Novos parcelamentos efetivados', T.novos_acordos || 0], ['Valor regularizado (total dos novos acordos)', n(T.valor_acordos || 0)], ['Entradas dos novos acordos (já no arrecadado)', n(T.entrada_acordos || 0)],
@@ -1149,7 +1157,7 @@ function baixarCsv() {
     E.combinacoes.forEach(c => { const a = c.qtd_meios * c.contatos; L.push([c.combinacao, c.contatos, a, c.pagos, pc(c.pagos, c.contatos), n(c.valor), a ? n(div0(c.valor, a).toFixed(2)) : '', c.pagos ? n(div0(a, c.pagos).toFixed(1)) : '', c.dias_medio == null ? '' : n(c.dias_medio)]); });
     L.push([], ['Fonte do telefone', 'Contatos', 'Resposta (%)', 'Contato falho (%)', 'Pagos', 'Conversão (%)', 'Valor']);
     E.por_fonte.forEach(x => L.push([x.fonte, x.contatos, pc(x.respondeu, x.contatos), pc(x.contato_falho, x.contatos), x.pagos, pc(x.pagos, x.contatos), n(x.valor)]));
-    L.push([], ['Meio que gerou o acordo', 'Acordos', 'Já pagos', 'Valor', 'Dias até pagar (média)']);
+    L.push([], ['Onde o acordo foi fechado', 'Acordos', 'Já pagos', 'Valor', 'Dias até pagar (média)']);
     E.meio_acordo.forEach(x => L.push([x.meio, x.acordos, x.pagos, n(x.valor), x.dias_medio == null ? '' : n(x.dias_medio)]));
     L.push([], ['Setor', 'Meio', 'Contatos', 'Pagos', 'Conversão (%)']);
     E.por_setor_meio.forEach(x => L.push([x.setor, x.meio, x.contatos, x.pagos, pc(x.pagos, x.contatos)]));
