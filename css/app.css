@@ -288,3 +288,6 @@ tr.linha-pendente td:first-child { box-shadow: inset 4px 0 0 var(--warn); }
 /* cancelamentos: resposta em massa */
 .resp-massa { margin: .2rem 0 .8rem; }
 .resp-massa .campo { min-width: 15rem; }
+
+/* eficácia: melhor retorno por esforço */
+tr.linha-destaque td { background: color-mix(in srgb, var(--ok-soft) 75%, transparent); }

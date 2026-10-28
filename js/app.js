@@ -480,8 +480,7 @@ async function telaLancar(params) {
     } else o.data_pagamento = null;
     if (cat === 'Pago' && o.valor_pago == null && !confirm('Situação "pago" sem valor informado. Salvar mesmo assim?')) return;
     if (cat !== 'Pago' && o.valor_pago != null && !confirm('Há valor pago, mas a situação não é de pagamento. Salvar mesmo assim?')) return;
-    // o primeiro contato é sempre via WhatsApp: ajuda a manter o funil correto
-    if (!o.whatsapp && !confirm('O primeiro contato é sempre via WhatsApp, mas o campo WhatsApp está vazio.\n\nOK = salvar assim mesmo\nCancelar = voltar e informar (Enviado, Respondido, Não respondido ou Sem WhatsApp)')) { f.whatsapp.focus(); return; }
+    // (o 1º contato pode ser por WhatsApp, SMS ou ligação: não há mais aviso de WhatsApp vazio)
     if (o.whatsapp === 'Enviado' && (cat === 'Pago' || o.boleto_emitido) && f._wppConferido !== (f.registro.value || 'novo')) {
       f._wppConferido = f.registro.value || 'novo';
       if (confirm('Houve acordo/pagamento, mas o WhatsApp está só como "Enviado".\nO contribuinte respondeu pelo WhatsApp?\n\nOK = sim, marcar como "Respondido"\nCancelar = não, manter "Enviado"')) { o.whatsapp = 'Respondido'; f.whatsapp.value = 'Respondido'; }
@@ -989,8 +988,8 @@ function htmlFunil(F, T) {
   const peq = n => (n < AMOSTRA_MIN ? ' <span class="dica" title="Poucos casos: resultado pouco confiável">*</span>' : '');
   const statusRot = { 'Respondido': 'Respondeu', 'Enviado': 'Enviado (aguardando resposta)', 'Não respondido': 'Não respondeu', 'Sem WhatsApp': 'Sem WhatsApp', 'Não informado': 'Não informado' };
   const st2 = [...new Set(F.etapa2.map(x => x.status_wpp))];
-  return `<div class="card"><h3 style="margin-top:0">Funil a partir do WhatsApp</h3>
-    <p class="dica">O primeiro contato é sempre via WhatsApp (etapa 1). SMS, ligação e agendamento formam a 2ª etapa. "Resolvido no WhatsApp" = pago usando só o WhatsApp, ou com o meio do acordo informado como WhatsApp.</p>
+  return `<div class="card"><h3 style="margin-top:0">Funil do WhatsApp</h3>
+    <p class="dica">Considera o WhatsApp como 1ª etapa e SMS, ligação e agendamento como 2ª etapa. Como o primeiro contato também pode ser por SMS ou ligação, para comparar caminhos diferentes use a tabela <strong>"Combinações de meios — resultado e esforço"</strong> abaixo.</p>
     ${avisos.map(a => `<div class="aviso atencao">${esc(a)}</div>`).join('')}
     <div class="funil">
       ${linha('Contatos no período', tot, '', '--s1')}
@@ -1031,6 +1030,13 @@ function desenharEficacia(E, { css, barra, eixos }) {
   const combosBons = E.combinacoes.filter(c => c.contatos >= AMOSTRA_MIN && c.combinacao !== 'Nenhuma ação registrada');
   const combos = combosBons.length ? combosBons : E.combinacoes.filter(c => c.contatos >= 3 && c.combinacao !== 'Nenhuma ação registrada');
   const melhorCombo = combos.slice().sort((a, b) => div0(b.pagos, b.contatos) - div0(a.pagos, a.contatos) || b.contatos - a.contatos)[0];
+  // esforço: cada meio usado num contato = 1 ação (WhatsApp, SMS, ligação, agendamento)
+  const acoesDe = c => c.qtd_meios * c.contatos;
+  const porAcao = c => div0(c.valor, acoesDe(c));
+  const totAcoes = E.combinacoes.reduce((a, c) => a + acoesDe(c), 0);
+  const totPagosCombo = E.combinacoes.reduce((a, c) => a + c.pagos, 0);
+  const melhorEsforco = combos.filter(c => c.pagos > 0).sort((a, b) => porAcao(b) - porAcao(a) || b.contatos - a.contatos)[0];
+  const combOrd = E.combinacoes.slice().sort((a, b) => (b.combinacao !== 'Nenhuma ação registrada') - (a.combinacao !== 'Nenhuma ação registrada') || porAcao(b) - porAcao(a) || b.contatos - a.contatos);
 
   // matriz setor × meio
   const setores = [...new Set(E.por_setor_meio.map(x => x.setor))];
@@ -1047,6 +1053,8 @@ function desenharEficacia(E, { css, barra, eixos }) {
   <div class="kpis">
     ${k('Meio com maior conversão', melhor ? esc(melhor.meio) : '—', melhor ? `${conv(melhor.pagos, melhor.contatos)} de conversão em ${NUM.format(melhor.contatos)} contato(s)` : '', 'destaque')}
     ${k('Melhor combinação', melhorCombo ? esc(melhorCombo.combinacao) : '—', melhorCombo ? `${conv(melhorCombo.pagos, melhorCombo.contatos)} em ${NUM.format(melhorCombo.contatos)} contato(s)` : 'mínimo de 3 contatos')}
+    ${k('Melhor retorno por esforço', melhorEsforco ? esc(melhorEsforco.combinacao) : '—', melhorEsforco ? `${BRL.format(porAcao(melhorEsforco))} por ação · ${DEC.format(div0(acoesDe(melhorEsforco), melhorEsforco.pagos))} ações por pagamento` : 'ainda sem dados suficientes')}
+    ${k('Esforço médio', totPagosCombo ? `${DEC.format(div0(totAcoes, totPagosCombo))} ações` : '—', `por pagamento · ${BRL.format(div0(T.valor, totAcoes))} por ação`)}
     ${k('Taxa de resposta', conv(T.respondeu, T.contatos), 'respondeu WhatsApp/SMS ou atendeu a ligação')}
     ${k('Contato falho', conv(T.contato_falho, T.contatos), 'número errado ou sem WhatsApp')}
     ${k('Tempo até o pagamento', dias(T.dias_medio), 'média entre o contato e o pagamento')}
@@ -1060,13 +1068,17 @@ function desenharEficacia(E, { css, barra, eixos }) {
   <div class="card"><h3>Resultado por meio utilizado</h3><div class="tabela-wrap"><table><thead><tr><th>Meio</th><th class="num">Contatos</th><th class="num">Responderam</th><th class="num">Taxa de resposta</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Sem sucesso</th><th class="num">Valor recebido</th><th class="num">Tempo até pagar</th></tr></thead><tbody>
     ${E.por_meio.map(m => `<tr><td>${esc(m.meio)}${peq(m.contatos)}</td><td class="num">${NUM.format(m.contatos)}</td><td class="num">${NUM.format(m.respondeu)}</td><td class="num">${conv(m.respondeu, m.contatos)}</td><td class="num">${NUM.format(m.pagos)}</td><td class="num"><strong>${conv(m.pagos, m.contatos)}</strong></td><td class="num">${NUM.format(m.sem_sucesso)}</td><td class="num">${BRL.format(m.valor)}</td><td class="num">${dias(m.dias_medio)}</td></tr>`).join('') || vazio(9)}
   </tbody></table></div></div>
+  <div class="card"><h3>Combinações de meios — resultado e esforço</h3>
+    <p class="dica">Exatamente quais meios foram usados no mesmo contato, em qualquer ordem (o 1º contato pode ser WhatsApp, SMS ou ligação). <strong>Ação</strong> = cada meio usado (WhatsApp, SMS, ligação, agendamento). <strong>R$ por ação</strong> mostra quanto cada tentativa trouxe; <strong>ações por pagamento</strong>, quanto trabalho custou cada pagamento. Ordenado pelo melhor retorno por ação.</p>
+    <div class="tabela-wrap"><table><thead><tr><th>Combinação</th><th class="num">Contatos</th><th class="num">Ações</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Valor</th><th class="num">R$ por ação</th><th class="num">Ações por pagamento</th><th class="num">Tempo até pagar</th></tr></thead><tbody>
+      ${combOrd.slice(0, 15).map(c => `<tr class="${melhorEsforco && c.combinacao === melhorEsforco.combinacao ? 'linha-destaque' : ''}"><td>${esc(c.combinacao)}${peq(c.contatos)}</td><td class="num">${NUM.format(c.contatos)}</td><td class="num">${NUM.format(acoesDe(c))}</td><td class="num">${NUM.format(c.pagos)}</td><td class="num">${conv(c.pagos, c.contatos)}</td><td class="num">${BRL.format(c.valor)}</td><td class="num"><strong>${acoesDe(c) ? BRL.format(porAcao(c)) : '—'}</strong></td><td class="num">${c.pagos && acoesDe(c) ? DEC.format(div0(acoesDe(c), c.pagos)) : '—'}</td><td class="num">${dias(c.dias_medio)}</td></tr>`).join('') || vazio(9)}
+      ${E.combinacoes.length ? `<tr class="total"><td>Total</td><td class="num">${NUM.format(E.combinacoes.reduce((a, c) => a + c.contatos, 0))}</td><td class="num">${NUM.format(totAcoes)}</td><td class="num">${NUM.format(totPagosCombo)}</td><td class="num">${conv(totPagosCombo, T.contatos)}</td><td class="num">${BRL.format(T.valor)}</td><td class="num">${BRL.format(div0(T.valor, totAcoes))}</td><td class="num">${totPagosCombo ? DEC.format(div0(totAcoes, totPagosCombo)) : '—'}</td><td></td></tr>` : ''}
+    </tbody></table></div></div>
   <div class="grade-2">
     <div class="card"><h3>Respondeu x só enviado</h3><p class="dica">Quanto o resultado muda conforme a resposta obtida em cada meio.</p><div class="tabela-wrap"><table><thead><tr><th>Meio</th><th>Resultado do contato</th><th class="num">Contatos</th><th class="num">Pagos</th><th class="num">Conversão</th></tr></thead><tbody>
       ${E.por_resposta.map(x => `<tr><td>${esc(x.meio)}</td><td>${esc(x.resp)}${peq(x.contatos)}</td><td class="num">${NUM.format(x.contatos)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num"><strong>${conv(x.pagos, x.contatos)}</strong></td></tr>`).join('') || vazio(5)}
     </tbody></table></div></div>
-    <div class="card"><h3>Combinações de meios</h3><p class="dica">Exatamente quais meios foram usados no mesmo contato.</p><div class="tabela-wrap"><table><thead><tr><th>Combinação</th><th class="num">Contatos</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Valor</th><th class="num">Tempo até pagar</th></tr></thead><tbody>
-      ${E.combinacoes.slice(0, 12).map(c => `<tr><td>${esc(c.combinacao)}${peq(c.contatos)}</td><td class="num">${NUM.format(c.contatos)}</td><td class="num">${NUM.format(c.pagos)}</td><td class="num"><strong>${conv(c.pagos, c.contatos)}</strong></td><td class="num">${BRL.format(c.valor)}</td><td class="num">${dias(c.dias_medio)}</td></tr>`).join('') || vazio(6)}
-    </tbody></table></div></div>
+
   </div>
   <div class="grade-2">
     <div class="card"><h3>Qualidade das fontes de telefone</h3><p class="dica">"Contato falho" = número errado ou sem WhatsApp.</p><div class="tabela-wrap"><table><thead><tr><th>Fonte</th><th class="num">Contatos</th><th class="num">Resposta</th><th class="num">Contato falho</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Valor</th></tr></thead><tbody>
@@ -1133,8 +1145,8 @@ function baixarCsv() {
     E.por_meio.forEach(m => L.push([m.meio, m.contatos, m.respondeu, pc(m.respondeu, m.contatos), m.pagos, pc(m.pagos, m.contatos), m.sem_sucesso, n(m.valor), m.dias_medio == null ? '' : n(m.dias_medio)]));
     L.push([], ['Meio', 'Resultado do contato', 'Contatos', 'Pagos', 'Conversão (%)']);
     E.por_resposta.forEach(x => L.push([x.meio, x.resp, x.contatos, x.pagos, pc(x.pagos, x.contatos)]));
-    L.push([], ['Combinação de meios', 'Contatos', 'Pagos', 'Conversão (%)', 'Valor', 'Dias até pagar (média)']);
-    E.combinacoes.forEach(c => L.push([c.combinacao, c.contatos, c.pagos, pc(c.pagos, c.contatos), n(c.valor), c.dias_medio == null ? '' : n(c.dias_medio)]));
+    L.push([], ['Combinação de meios', 'Contatos', 'Ações', 'Pagos', 'Conversão (%)', 'Valor', 'R$ por ação', 'Ações por pagamento', 'Dias até pagar (média)']);
+    E.combinacoes.forEach(c => { const a = c.qtd_meios * c.contatos; L.push([c.combinacao, c.contatos, a, c.pagos, pc(c.pagos, c.contatos), n(c.valor), a ? n(div0(c.valor, a).toFixed(2)) : '', c.pagos ? n(div0(a, c.pagos).toFixed(1)) : '', c.dias_medio == null ? '' : n(c.dias_medio)]); });
     L.push([], ['Fonte do telefone', 'Contatos', 'Resposta (%)', 'Contato falho (%)', 'Pagos', 'Conversão (%)', 'Valor']);
     E.por_fonte.forEach(x => L.push([x.fonte, x.contatos, pc(x.respondeu, x.contatos), pc(x.contato_falho, x.contatos), x.pagos, pc(x.pagos, x.contatos), n(x.valor)]));
     L.push([], ['Meio que gerou o acordo', 'Acordos', 'Já pagos', 'Valor', 'Dias até pagar (média)']);
