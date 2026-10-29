@@ -26,6 +26,7 @@ const OPC = {
   meio_acordo: ['WhatsApp', 'SMS', 'Ligação', 'Atendimento presencial', 'Contribuinte procurou']
 };
 const RE_ID = /^[0-9A-Za-z./-]{1,30}$/;
+const ICO_CAL = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>';
 // Tipo de cobrança: Padrão = acordo com 3 ou mais parcelas vencidas; Antecipada = menos de 3 vencidas
 const TIPOS_COB = [['Padrão', 'Padrão — 3 ou mais parcelas vencidas', 'Padrão (3+)'], ['Antecipada', 'Antecipada — menos de 3 parcelas vencidas', 'Antecipada (<3)']];
 const optTiposCob = (sel = '', comNaoInf = true) => `<option value="">Todos</option>${TIPOS_COB.map(([v, , c]) => `<option value="${v}" ${v === sel ? 'selected' : ''}>${esc(c)}</option>`).join('')}${comNaoInf ? `<option value="Não informado" ${sel === 'Não informado' ? 'selected' : ''}>Não informado</option>` : ''}`;
@@ -805,67 +806,74 @@ async function telaBuscar(params = {}) {
 }
 
 // ---------------------------------------------------------------- RELATÓRIOS
-function periodo(tipo, ano, n, ini, fim, corte = 0) {
-  ano = Number(ano); n = Number(n); corte = Number(corte) || 0;
-  // mensal com dia de fechamento: "outubro fechando no dia 10" = 11/09 a 10/10
-  if (tipo === 'mes' && corte >= 1 && corte <= 28) {
-    const fimC = `${ano}-${pad(n)}-${pad(corte)}`, iniC = addDias(`${n === 1 ? ano - 1 : ano}-${pad(n === 1 ? 12 : n - 1)}-${pad(corte)}`, 1);
-    return { ini: iniC, fim: fimC, rotulo: `${MESES[n - 1].toUpperCase()}/${ano} (${fmtData(iniC).slice(0, 5)} a ${fmtData(fimC).slice(0, 5)})` };
-  }
-  if (tipo === 'personalizado') return { ini, fim, rotulo: `${fmtData(ini)} a ${fmtData(fim)}` };
-  if (tipo === 'dia') return { ini, fim: ini, rotulo: ini ? `DIA ${fmtData(ini)} (${diaSemana(ini).toUpperCase()})` : '' };
-  let m1 = 1, m2 = 12, rot = `ANO DE ${ano}`;
-  if (tipo === 'mes') { m1 = m2 = n; rot = `${MESES[n - 1].toUpperCase()}/${ano}`; }
-  if (tipo === 'trimestre') { m1 = 3 * n - 2; m2 = 3 * n; rot = `${n}º TRIMESTRE DE ${ano} (${MES_ABR[m1 - 1]}–${MES_ABR[m2 - 1]})`; }
-  if (tipo === 'semestre') { m1 = 6 * n - 5; m2 = 6 * n; rot = `${n}º SEMESTRE DE ${ano}`; }
-  return { ini: `${ano}-${pad(m1)}-01`, fim: `${ano}-${pad(m2)}-${pad(ultimoDia(ano, m2))}`, rotulo: rot };
+// título do relatório conforme o período escolhido
+function rotuloPeriodo(ini, fim) {
+  if (!ini || !fim) return '';
+  const [y1, m1, d1] = ini.split('-').map(Number), [y2, m2, d2] = fim.split('-').map(Number);
+  if (ini === fim) return `DIA ${fmtData(ini)} (${diaSemana(ini).toUpperCase()})`;
+  if (d1 === 1 && y1 === y2 && m1 === m2 && d2 === ultimoDia(y2, m2)) return `${MESES[m1 - 1].toUpperCase()}/${y1}`;
+  if (d1 === 1 && m1 === 1 && y1 === y2 && m2 === 12 && d2 === 31) return `ANO DE ${y1}`;
+  return `${fmtData(ini)} a ${fmtData(fim)}`;
 }
 
 function telaRelatorios(params) {
   const [ya, ma] = hoje().split('-').map(Number);
-  const anos = []; for (let y = ya; y >= Math.max(2024, ya - 6); y--) anos.push(y);
   app().innerHTML = `
   <div class="cab nao-imprimir"><div><h1>Relatórios</h1><p class="sub">Escolha o período${ehSup() ? ' e o funcionário' : ''}. Tudo é calculado na hora, a partir dos lançamentos.</p></div>
     <div class="acoes"><button class="btn" id="btnImprimir">Imprimir / salvar PDF</button><button class="btn" id="btnCsv">Baixar resumo (CSV)</button></div></div>
   <form class="card nao-imprimir" id="fRel"><div class="linha">
-    <label class="campo">Período<select name="tipo">
-      <option value="dia">Diário</option><option value="mes" selected>Mensal</option><option value="trimestre">Trimestral</option><option value="semestre">Semestral</option>
-      <option value="ano">Anual</option><option value="personalizado">Personalizado</option></select></label>
-    <label class="campo" id="cAno">Ano<select name="ano">${anos.map(y => `<option>${y}</option>`).join('')}</select></label>
-    <label class="campo" id="cNum">Mês<select name="n"></select></label>
-    <label class="campo" id="cCorte">Fecha no dia<select name="corte"><option value="0">Último dia do mês</option>${Array.from({ length: 28 }, (_, i) => `<option value="${i + 1}">Dia ${i + 1} (de ${i + 2} do mês anterior a ${i + 1})</option>`).join('')}</select></label>
-    <div class="campo" id="cDia" hidden><span>Dia</span><div class="barra-dia">
-      <button class="btn" type="button" id="relDiaAnt" title="Dia anterior" aria-label="Dia anterior">‹</button>
-      <input type="date" name="dia" aria-label="Dia do relatório">
-      <button class="btn" type="button" id="relDiaProx" title="Próximo dia" aria-label="Próximo dia">›</button>
-      <button class="btn" type="button" id="relDiaHoje">Hoje</button></div></div>
-    <label class="campo" id="cIni" hidden>De<input type="date" name="ini"></label>
-    <label class="campo" id="cFim" hidden>Até<input type="date" name="fim"></label>
+    <div class="campo"><span id="rotPer">Período</span><div class="periodo" role="group" aria-labelledby="rotPer">
+      <span class="per-rot">De</span><button type="button" class="per-dt" data-q="ini" aria-haspopup="dialog">${ICO_CAL}<span></span></button>
+      <span class="per-rot">a</span><button type="button" class="per-dt" data-q="fim" aria-haspopup="dialog">${ICO_CAL}<span></span></button>
+      <div class="cal-pop" role="dialog" aria-label="Escolher data" hidden></div>
+      <input type="hidden" name="ini"><input type="hidden" name="fim"></div></div>
     ${ehSup() ? `<label class="campo">Funcionário<select name="func"><option value="">Toda a equipe</option>${S.perfis.map(p => `<option value="${p.id}">${esc(p.nome)}${p.ativo ? '' : ' (inativo)'}</option>`).join('')}</select></label>` : ''}
     <label class="campo">Tipo de cobrança<select name="tc">${optTiposCob()}</select></label>
     <button class="btn prim" type="submit">Gerar</button></div></form>
   <div id="rel"></div>`;
   const f = $('#fRel');
-  const ajustarN = () => {
-    const t = f.tipo.value; const ops = { mes: MESES.map((m, i) => [i + 1, m]), trimestre: [1, 2, 3, 4].map(i => [i, `${i}º trimestre`]), semestre: [[1, '1º semestre'], [2, '2º semestre']] }[t];
-    $('#cNum').hidden = !ops; $('#cCorte').hidden = t !== 'mes'; $('#cAno').hidden = t === 'personalizado' || t === 'dia'; $('#cIni').hidden = $('#cFim').hidden = t !== 'personalizado'; $('#cDia').hidden = t !== 'dia';
-    if (ops) {
-      $('#cNum').firstChild.textContent = { mes: 'Mês', trimestre: 'Trimestre', semestre: 'Semestre' }[t];
-      const atual = { mes: ma, trimestre: Math.ceil(ma / 3), semestre: Math.ceil(ma / 6) }[t];
-      f.n.innerHTML = ops.map(([v, r]) => `<option value="${v}" ${v === atual ? 'selected' : ''}>${r}</option>`).join('');
-    }
+  // período: dois botões (De / a), cada um abre o próprio calendário; as datas ficam lembradas neste navegador
+  let ini = `${ya}-${pad(ma)}-01`, fim = `${ya}-${pad(ma)}-${pad(ultimoDia(ya, ma))}`;
+  try { const a = localStorage.getItem('rel_ini'), b = localStorage.getItem('rel_fim'); if (/^\d{4}-\d\d-\d\d$/.test(a) && /^\d{4}-\d\d-\d\d$/.test(b) && a <= b) { ini = a; fim = b; } } catch (_) {}
+  const pop = $('.cal-pop', f);
+  let alvo = null, vis = null;   // qual data está sendo escolhida e o mês visível (AAAA-MM)
+  const mostrar = () => {
+    f.ini.value = ini; f.fim.value = fim;
+    $$('.per-dt', f).forEach(b => { b.lastElementChild.textContent = fmtData(b.dataset.q === 'ini' ? ini : fim); b.classList.toggle('on', b.dataset.q === alvo && !pop.hidden); b.setAttribute('aria-expanded', String(b.dataset.q === alvo && !pop.hidden)); });
+    try { localStorage.setItem('rel_ini', ini); localStorage.setItem('rel_fim', fim); } catch (_) {}
   };
-  f.tipo.addEventListener('change', ajustarN); ajustarN();
-  // dia de fechamento do mensal fica lembrado neste navegador
-  try { const c = localStorage.getItem('rel_corte'); if (c && [...f.corte.options].some(o => o.value === c)) f.corte.value = c; } catch (_) {}
-  f.corte.addEventListener('change', () => { try { localStorage.setItem('rel_corte', f.corte.value); } catch (_) {} });
-  f.ini.value = `${ya}-${pad(ma)}-01`; f.fim.value = hoje(); f.dia.value = hoje();
-  // no relatório diário, trocar o dia já gera o relatório
-  const irDia = d => { if (d) { f.dia.value = d; gerarRelatorio(f); } };
-  $('#relDiaAnt').addEventListener('click', () => irDia(addDias(f.dia.value || hoje(), -1)));
-  $('#relDiaProx').addEventListener('click', () => irDia(addDias(f.dia.value || hoje(), 1)));
-  $('#relDiaHoje').addEventListener('click', () => irDia(hoje()));
-  f.dia.addEventListener('change', () => irDia(f.dia.value));
+  const desenharCal = () => {
+    const [y, m] = vis.split('-').map(Number);
+    const prim = new Date(Date.UTC(y, m - 1, 1)).getUTCDay(), n = ultimoDia(y, m), sel = alvo === 'ini' ? ini : fim, h = hoje();
+    let dias = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map(w => `<span class="cal-sem">${w}</span>`).join('') + '<span></span>'.repeat(prim);
+    for (let d = 1; d <= n; d++) {
+      const iso = `${y}-${pad(m)}-${pad(d)}`;
+      dias += `<button type="button" class="cal-dia${iso === sel ? ' sel' : iso > ini && iso < fim ? ' faixa' : ''}${iso === h ? ' hoje' : ''}" data-d="${iso}">${d}</button>`;
+    }
+    pop.innerHTML = `<div class="cal-cab"><button type="button" class="cal-nav" data-nav="-1" aria-label="Mês anterior">‹</button><strong>${MESES[m - 1]} ${y}</strong><button type="button" class="cal-nav" data-nav="1" aria-label="Próximo mês">›</button></div>
+      <div class="cal-grade">${dias}</div>
+      <div class="cal-rod"><button type="button" class="cal-link" data-d="${h}">Hoje</button><button type="button" class="cal-link" data-fechar>Fechar</button></div>`;
+  };
+  const abrir = q => {
+    alvo = q; const v = q === 'ini' ? ini : fim; vis = v.slice(0, 7);
+    const b = $(`.per-dt[data-q="${q}"]`, f); pop.style.left = b.offsetLeft + 'px';
+    pop.hidden = false; desenharCal(); mostrar();
+  };
+  const fechar = () => { pop.hidden = true; alvo = null; mostrar(); };
+  $$('.per-dt', f).forEach(b => b.addEventListener('click', e => { e.stopPropagation(); if (!pop.hidden && alvo === b.dataset.q) fechar(); else abrir(b.dataset.q); }));
+  pop.addEventListener('click', e => {
+    e.stopPropagation();
+    const t = e.target.closest('button'); if (!t) return;
+    if (t.dataset.nav) { const [y, m] = vis.split('-').map(Number); const d = new Date(Date.UTC(y, m - 1 + Number(t.dataset.nav), 1)); vis = isoDe(d).slice(0, 7); desenharCal(); return; }
+    if (t.hasAttribute('data-fechar')) { fechar(); return; }
+    const d = t.dataset.d; if (!d) return;
+    if (alvo === 'ini') { ini = d; if (fim < ini) fim = ini; abrir('fim'); }   // escolheu o início: abre o calendário do fim
+    else { fim = d; if (fim < ini) ini = fim; fechar(); }
+  });
+  const foraFecha = e => { if (!document.body.contains(pop)) return document.removeEventListener('click', foraFecha); if (!pop.hidden && !e.target.closest('.periodo')) fechar(); };
+  const escFecha = e => { if (!document.body.contains(pop)) return document.removeEventListener('keydown', escFecha); if (e.key === 'Escape' && !pop.hidden) fechar(); };
+  document.addEventListener('click', foraFecha); document.addEventListener('keydown', escFecha);
+  mostrar();
   f.addEventListener('submit', e => { e.preventDefault(); gerarRelatorio(f); });
   $('#btnImprimir').addEventListener('click', () => window.print());
   $('#btnCsv').addEventListener('click', () => baixarCsv());
@@ -874,7 +882,7 @@ function telaRelatorios(params) {
 
 let ULTIMO = null;
 async function gerarRelatorio(f) {
-  const p = f.tipo.value === 'dia' ? periodo('dia', 0, 0, f.dia.value) : periodo(f.tipo.value, f.ano.value, f.n.value, f.ini.value, f.fim.value, f.corte.value);
+  const p = { ini: f.ini.value, fim: f.fim.value, rotulo: rotuloPeriodo(f.ini.value, f.fim.value) };
   if (!p.ini || !p.fim || p.ini > p.fim) return toast('Período inválido.', true);
   const func = f.func ? f.func.value || null : null;
   const nomeFunc = func ? (S.perfis.find(x => x.id === func)?.nome || '') : (ehSup() ? 'TODA A EQUIPE' : S.perfil.nome);

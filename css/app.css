@@ -291,3 +291,24 @@ tr.linha-pendente td:first-child { box-shadow: inset 4px 0 0 var(--warn); }
 
 /* eficácia: melhor retorno por esforço */
 tr.linha-destaque td { background: color-mix(in srgb, var(--ok-soft) 75%, transparent); }
+
+/* Relatórios: período De / a com calendário que abre ao clicar */
+.periodo { position: relative; display: flex; align-items: center; gap: .3rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: .2rem .35rem; }
+.per-rot { font-weight: 400; color: var(--muted); font-size: .85rem; padding: 0 .15rem; }
+.per-dt { display: inline-flex; align-items: center; gap: .35rem; font: inherit; font-size: .95rem; font-weight: 400; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: .3rem .45rem; cursor: pointer; }
+.per-dt:hover { background: var(--surface-2); }
+.per-dt.on { border-color: var(--focus); background: var(--primary-soft); }
+.per-dt svg { color: var(--muted); }
+.cal-pop { position: absolute; top: calc(100% + 6px); z-index: 30; width: 248px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: .55rem .6rem; font-weight: 400; }
+.cal-cab { display: flex; justify-content: space-between; align-items: center; margin-bottom: .35rem; font-size: .9rem; text-transform: capitalize; }
+.cal-nav, .cal-link { font: inherit; background: transparent; border: none; color: var(--primary); cursor: pointer; border-radius: 6px; padding: .2rem .5rem; }
+.cal-nav { font-size: 1.1rem; }
+.cal-nav:hover, .cal-link:hover { background: var(--surface-2); }
+.cal-grade { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+.cal-sem { font-size: .75rem; color: var(--muted); padding: .2rem 0; }
+.cal-dia { font: inherit; font-size: .85rem; color: var(--ink); background: transparent; border: none; border-radius: 6px; height: 30px; cursor: pointer; }
+.cal-dia:hover { background: var(--surface-2); }
+.cal-dia.faixa { background: var(--primary-soft); border-radius: 0; }
+.cal-dia.hoje { font-weight: 700; text-decoration: underline; }
+.cal-dia.sel { background: var(--primary); color: var(--primary-ink); }
+.cal-rod { display: flex; justify-content: space-between; border-top: 1px solid var(--line); margin-top: .4rem; padding-top: .35rem; font-size: .85rem; }
