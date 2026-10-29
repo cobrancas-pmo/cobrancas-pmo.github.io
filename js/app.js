@@ -26,6 +26,10 @@ const OPC = {
   meio_acordo: ['WhatsApp', 'SMS', 'Ligação', 'Atendimento presencial', 'Contribuinte procurou']
 };
 const RE_ID = /^[0-9A-Za-z./-]{1,30}$/;
+// Tipo de cobrança: Padrão = acordo com 3 ou mais parcelas vencidas; Antecipada = menos de 3 vencidas
+const TIPOS_COB = [['Padrão', 'Padrão — 3 ou mais parcelas vencidas', 'Padrão (3+)'], ['Antecipada', 'Antecipada — menos de 3 parcelas vencidas', 'Antecipada (<3)']];
+const optTiposCob = (sel = '', comNaoInf = true) => `<option value="">Todos</option>${TIPOS_COB.map(([v, , c]) => `<option value="${v}" ${v === sel ? 'selected' : ''}>${esc(c)}</option>`).join('')}${comNaoInf ? `<option value="Não informado" ${sel === 'Não informado' ? 'selected' : ''}>Não informado</option>` : ''}`;
+const testaTipoCob = (r, t) => !t || (t === 'Não informado' ? !r.tipo_cobranca : r.tipo_cobranca === t);
 
 const hoje = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 const fmtData = iso => { if (!iso) return ''; const [y, m, d] = String(iso).slice(0, 10).split('-'); return `${d}/${m}/${y}`; };
@@ -67,6 +71,7 @@ function msgErro(e) {
     [/lancamentos_novo_parcelamento_check/i, 'Nº do novo parcelamento inválido: use apenas números/letras, sem espaços.'],
     [/lancamentos_valor_acordo_check/i, 'Valor total do acordo inválido.'],
     [/lancamentos_tipo_acordo_check/i, 'Tipo de acordo inválido.'],
+    [/lancamentos_tipo_cobranca_check/i, 'Tipo de cobrança inválido.'],
     [/lancamentos_situacao_fkey/i, 'Esta situação já foi usada em lançamentos e não pode ser excluída. Desative-a.'],
     [/lancamentos_vencimento_apos_emissao/i, 'O vencimento não pode ser anterior à emissão do boleto.'],
     [/Failed to fetch|NetworkError/i, 'Sem conexão com o servidor. Verifique sua internet.'],
@@ -355,6 +360,7 @@ async function telaLancar(params) {
       <label class="campo">Setor<select name="setor">${optList(setores)}</select></label>
       <label class="campo">Origem / inscrição<input name="origem" maxlength="30" placeholder="ex.: 62902"></label>
       <label class="campo">Fonte do contato<select name="fonte_contato">${optList(OPC.fonte)}</select></label>
+      <label class="campo largo">Tipo de cobrança<select name="tipo_cobranca">${TIPOS_COB.map(([v, rot], i) => `<option value="${v}" ${i === 0 ? 'selected' : ''}>${esc(rot)}</option>`).join('')}<option value="">— Não informado</option></select></label>
     </div><div id="avisoDup"></div></fieldset>
     <fieldset><legend>Ações realizadas</legend><div class="grade">
       <label class="campo">WhatsApp<select name="whatsapp">${optList(OPC.whatsapp)}</select></label>
@@ -454,7 +460,8 @@ async function telaLancar(params) {
       valor_pago: parseValor(f.valor_pago.value), data_pagamento: f.data_pagamento.value || null, observacoes: f.observacoes.value.trim() || null,
       meio_acordo: f.meio_acordo.value || null,
       valor_acordo: parseValor(f.valor_acordo.value), novo_parcelamento: f.novo_parcelamento.value.trim() || null,
-      tipo_acordo: tipoAtual() || null, entrega_boleto: f.entrega_boleto.value || null
+      tipo_acordo: tipoAtual() || null, entrega_boleto: f.entrega_boleto.value || null,
+      tipo_cobranca: f.tipo_cobranca.value || null
     };
     if (!aceitaMeio(o.situacao)) o.meio_acordo = null;
     if (sitNovoAcordo(o.situacao) && o.tipo_acordo !== 'Novo parcelamento') o.tipo_acordo = 'Novo parcelamento';
@@ -537,6 +544,7 @@ function editar(l) {
   f.meio_acordo.disabled = !aceitaMeio(l.situacao);
   f.valor_acordo.value = fmtValorInput(l.valor_acordo); f.novo_parcelamento.value = l.novo_parcelamento || '';
   f.entrega_boleto.value = l.entrega_boleto || 'WhatsApp';
+  f.tipo_cobranca.value = l.tipo_cobranca || '';
   f._setTipo(l.tipo_acordo || (l.valor_acordo != null || l.novo_parcelamento || sitNovoAcordo(l.situacao) ? 'Novo parcelamento' : (l.boleto_emitido || l.boleto_vencimento || l.valor_boleto != null ? 'Boleto' : '')));
   f._wppConferido = null;
   const dono = l.funcionario_id !== S.user.id ? ` (lançamento de ${S.perfis.find(p => p.id === l.funcionario_id)?.nome || 'outro funcionário'})` : '';
@@ -608,6 +616,7 @@ async function telaPendentes(params = {}) {
       <label class="campo">Mostrar<select id="filtroPend">
         <option value="todos">Todos os pendentes</option><option value="conf">Só os que precisam de conferência</option><option value="venc">Só boletos vencidos (conferir pagamento)</option><option value="agend">Só agendamentos vencidos (conferir comparecimento)</option><option value="efet">Só encaminhados para parcelamento (conferir efetivação)</option>
         <option value="and">Só "Em andamento"</option><option value="sem">Só "Sem situação"</option></select></label>
+      <label class="campo">Tipo de cobrança<select id="tipoPend">${optTiposCob(params.tc || '')}</select></label>
     </div>
     <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Data do contato</th><th class="num">Dias</th><th>Id parc.</th><th>Setor</th><th>Situação</th><th>Agendamento</th><th>Boleto</th>${daEquipe ? '<th>Atendente</th>' : ''}<th>Observações</th><th></th></tr></thead>
     <tbody id="tbPend"><tr><td colspan="${colsN}" class="vazio">Carregando…</td></tr></tbody></table></div>
@@ -615,7 +624,7 @@ async function telaPendentes(params = {}) {
   const fSel = $('#filtroPend');
   if (params.filtro && [...fSel.options].some(o => o.value === params.filtro)) fSel.value = params.filtro;
   if ($('#dePend')) $('#dePend').addEventListener('change', e => {
-    const u = new URLSearchParams(); if (e.target.value !== 'eu') u.set('de', e.target.value); if (fSel.value !== 'todos') u.set('filtro', fSel.value);
+    const u = new URLSearchParams(); if (e.target.value !== 'eu') u.set('de', e.target.value); if (fSel.value !== 'todos') u.set('filtro', fSel.value); if ($('#tipoPend').value) u.set('tc', $('#tipoPend').value);
     location.hash = '#/pendentes' + (u.toString() ? '?' + u : '');
   });
   const codsAnd = S.situacoes.filter(s => s.categoria === 'Em andamento').map(s => `"${s.codigo.replace(/"/g, '')}"`);
@@ -630,12 +639,13 @@ async function telaPendentes(params = {}) {
   const todas = (data || []).slice().sort((a, b) => pri(a) - pri(b) || (pri(a) === 0 ? dataRef(a).localeCompare(dataRef(b)) : 0));
   const testes = { todos: () => true, conf: conferir, venc: r => statusVenc(r) === 'conferir', agend: r => statusAgend(r) === 'conferir', efet: r => statusEfet(r) === 'conferir', and: r => !!r.situacao, sem: r => !r.situacao };
   // quantidades nas próprias opções do filtro (substituem os quadros da equipe)
-  [...fSel.options].forEach(o => { const n = todas.filter(testes[o.value]).length; o.textContent = o.textContent.replace(/ \(\d+\)$/, '') + ` (${n})`; });
+  const tSel = $('#tipoPend');
+  const contar = () => [...fSel.options].forEach(o => { const n = todas.filter(r => testaTipoCob(r, tSel.value) && testes[o.value](r)).length; o.textContent = o.textContent.replace(/ \(\d+\)$/, '') + ` (${n})`; });
   const podeEditar = r => r.funcionario_id === S.user.id || ehAdmin();
   const vazios = { venc: 'Nenhum boleto vencido para conferir. 👍', agend: 'Nenhum agendamento vencido para conferir. 👍', efet: 'Nenhum encaminhamento para parcelamento a conferir. 👍', conf: 'Nada para conferir. 👍' };
   const desenhar = () => {
     const filtro = fSel.value;
-    const rows = todas.filter(testes[filtro] || testes.todos);
+    const rows = todas.filter(r => testaTipoCob(r, tSel.value) && (testes[filtro] || testes.todos)(r));
     if (!rows.length) { tb.innerHTML = `<tr><td colspan="${colsN}" class="vazio">${vazios[filtro] || 'Nenhuma pendência. 👍'}</td></tr>`; return; }
     tb.innerHTML = rows.map(r => `<tr class="${conferir(r) ? 'linha-alerta' : ''}"><td>${fmtData(r.data_contato)}</td><td class="num">${diasDesde(r.data_contato)}</td>
       <td><strong>${esc(r.id_parcelamento)}</strong></td><td>${esc(r.setor || '')}</td>
@@ -646,14 +656,15 @@ async function telaPendentes(params = {}) {
         ? `<a class="btn peq ${conferir(r) ? 'prim' : ''}" href="#/lancar?data=${r.data_contato}&editar=${r.id}">${conferir(r) ? 'Conferir' : 'Atualizar'}</a>`
         : `<a class="btn peq" href="#/buscar?q=${encodeURIComponent(r.id_parcelamento)}" title="Somente consulta">Ver</a>`}</td></tr>`).join('');
   };
-  fSel.addEventListener('change', desenhar); desenhar();
+  fSel.addEventListener('change', desenhar); tSel.addEventListener('change', () => { contar(); desenhar(); }); contar(); desenhar();
 }
 
 // ---------------------------------------------------------------- BUSCAR
 async function telaBuscar(params = {}) {
   const sup = ehSup();
   const P = { q: (params.q || '').trim(), ini: params.ini || '', fim: params.fim || '', setor: params.setor || '', sit: params.sit || '',
-              func: params.func || '', st: ['pend', 'fin'].includes(params.st) ? params.st : '' };
+              func: params.func || '', st: ['pend', 'fin'].includes(params.st) ? params.st : '',
+              tc: ['Padrão', 'Antecipada', 'Não informado'].includes(params.tc) ? params.tc : '' };
   const optSit = `<option value="">Todas</option><option value="__sem" ${P.sit === '__sem' ? 'selected' : ''}>(sem situação)</option>` + CATEGORIAS.slice(0, 4).map(cat => {
     const itens = S.situacoes.filter(s => s.categoria === cat);
     return itens.length ? `<optgroup label="${esc(catNome(cat))}">${itens.map(s => `<option value="${esc(s.codigo)}" ${s.codigo === P.sit ? 'selected' : ''}>${esc(s.codigo)}${s.ativo ? '' : ' (desativada)'}</option>`).join('')}</optgroup>` : '';
@@ -668,6 +679,7 @@ async function telaBuscar(params = {}) {
     <label class="campo">até<input type="date" name="fim" value="${esc(P.fim)}"></label>
     <label class="campo">Setor<select name="setor"><option value="">Todos</option>${S.setores.map(s => `<option ${s.nome === P.setor ? 'selected' : ''}>${esc(s.nome)}</option>`).join('')}</select></label>
     <label class="campo">Situação<select name="sit">${optSit}</select></label>
+    <label class="campo">Tipo de cobrança<select name="tc">${optTiposCob(P.tc)}</select></label>
     <button class="btn prim" type="submit">Buscar</button><button class="btn" type="button" id="btnLimparBusca">Limpar</button>
   </div></form>
   <div id="resBusca"><p class="carregando">Carregando…</p></div>`;
@@ -678,12 +690,12 @@ async function telaBuscar(params = {}) {
     if (q && !RE_ID.test(q)) { f.q.focus(); return toast('Use só números/letras (Id do parcelamento ou origem), sem espaços.', true); }
     if (f.ini.value && f.fim.value && f.ini.value > f.fim.value) return toast('Período inválido.', true);
     const u = new URLSearchParams();
-    if (q) u.set('q', q); for (const k of ['st', 'ini', 'fim', 'setor', 'sit']) if (f[k].value) u.set(k, f[k].value);
+    if (q) u.set('q', q); for (const k of ['st', 'ini', 'fim', 'setor', 'sit', 'tc']) if (f[k].value) u.set(k, f[k].value);
     if (f.func && f.func.value) u.set('func', f.func.value);
     const h = '#/buscar' + (u.toString() ? '?' + u : '');
     if (location.hash === h) telaBuscar(Object.fromEntries(u)); else location.hash = h;
   });
-  for (const nm of ['func', 'st', 'setor', 'sit']) if (f[nm]) f[nm].addEventListener('change', () => f.requestSubmit());
+  for (const nm of ['func', 'st', 'setor', 'sit', 'tc']) if (f[nm]) f[nm].addEventListener('change', () => f.requestSubmit());
   $('#btnLimparBusca').addEventListener('click', () => { location.hash = '#/buscar'; });
 
   const box = $('#resBusca');
@@ -704,6 +716,7 @@ async function telaBuscar(params = {}) {
     if (P.fim) q = q.lte('data_contato', P.fim);
     if (P.setor) q = q.eq('setor', P.setor);
     if (P.sit === '__sem') q = q.is('situacao', null); else if (P.sit) q = q.eq('situacao', P.sit);
+    if (P.tc === 'Não informado') q = q.is('tipo_cobranca', null); else if (P.tc) q = q.eq('tipo_cobranca', P.tc);
     if (!sup) q = q.eq('funcionario_id', S.user.id); else if (P.func) q = q.eq('funcionario_id', P.func);
     return q;
   };
@@ -727,7 +740,7 @@ async function telaBuscar(params = {}) {
     const c = (rot, v) => (v == null || v === '' ? '' : `<div><span class="dica">${rot}</span><div>${v}</div></div>`);
     return `<tr class="linha-detalhe" data-det-de="${r.id}"><td colspan="${colsN}"><div class="detalhe-grade">
       ${c('Fonte do contato', esc(r.fonte_contato))}${c('WhatsApp', esc(r.whatsapp))}${c('SMS', esc(r.sms))}${c('Ligação', esc(r.ligacao))}${c('Agendamento', fmtData(r.agendamento))}
-      ${c('Tipo de acordo', esc(r.tipo_acordo))}${c(r.tipo_acordo === 'Novo parcelamento' ? '1ª parcela emitida em' : 'Boleto emitido em', fmtData(r.boleto_emitido))}${c('Vencimento', fmtData(r.boleto_vencimento))}${c('Nº de parcelas', r.parcelas)}${c('Valor do boleto', r.valor_boleto != null ? BRL.format(r.valor_boleto) : '')}
+      ${c('Tipo de cobrança', esc(r.tipo_cobranca || 'Não informado'))}${c('Tipo de acordo', esc(r.tipo_acordo))}${c(r.tipo_acordo === 'Novo parcelamento' ? '1ª parcela emitida em' : 'Boleto emitido em', fmtData(r.boleto_emitido))}${c('Vencimento', fmtData(r.boleto_vencimento))}${c('Nº de parcelas', r.parcelas)}${c('Valor do boleto', r.valor_boleto != null ? BRL.format(r.valor_boleto) : '')}
       ${c('Situação', esc(r.situacao || '(sem situação)'))}${c('Valor pago', r.valor_pago != null ? BRL.format(r.valor_pago) : '')}${c('Data do pagamento', fmtData(r.data_pagamento))}${c('Onde o acordo foi fechado', esc(r.meio_acordo))}${c(r.tipo_acordo === 'Novo parcelamento' ? '1ª parcela entregue por' : 'Boleto entregue por', esc(r.entrega_boleto))}
       ${c('Valor total do novo acordo', r.valor_acordo != null ? BRL.format(r.valor_acordo) : '')}${c('Nº do novo parcelamento', esc(r.novo_parcelamento))}${c('Na situação atual desde', fmtData(r.situacao_desde))}
       ${c('Cancelamento', r.cancelamento_status ? esc(cancNome(r.cancelamento_status)) : '')}${c('Retorno do setor', esc(r.cancelamento_obs))}
@@ -819,6 +832,7 @@ function telaRelatorios(params) {
     <label class="campo" id="cIni" hidden>De<input type="date" name="ini"></label>
     <label class="campo" id="cFim" hidden>Até<input type="date" name="fim"></label>
     ${ehSup() ? `<label class="campo">Funcionário<select name="func"><option value="">Toda a equipe</option>${S.perfis.map(p => `<option value="${p.id}">${esc(p.nome)}${p.ativo ? '' : ' (inativo)'}</option>`).join('')}</select></label>` : ''}
+    <label class="campo">Tipo de cobrança<select name="tc">${optTiposCob()}</select></label>
     <button class="btn prim" type="submit">Gerar</button></div></form>
   <div id="rel"></div>`;
   const f = $('#fRel');
@@ -852,13 +866,16 @@ async function gerarRelatorio(f) {
   const func = f.func ? f.func.value || null : null;
   const nomeFunc = func ? (S.perfis.find(x => x.id === func)?.nome || '') : (ehSup() ? 'TODA A EQUIPE' : S.perfil.nome);
   const box = $('#rel'); box.innerHTML = '<p class="carregando">Calculando…</p>';
-  const args = { p_inicio: p.ini, p_fim: p.fim, p_func: func };
+  const tc = f.tc.value || null;
+  const tcRot = tc ? (TIPOS_COB.find(x => x[0] === tc)?.[1] || tc) : '';
+  const args = { p_inicio: p.ini, p_fim: p.fim, p_func: func, p_tipo: tc };
   const [{ data: R, error }, { data: E, error: errE }] = await Promise.all([sb.rpc('relatorio', args), sb.rpc('relatorio_eficacia', args)]);
   if (error) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(error))}</div>`; return; }
-  ULTIMO = { R, p, nomeFunc, E: errE ? null : E };
+  ULTIMO = { R, p, nomeFunc, tcRot, E: errE ? null : E };
   // entregas pessoalmente (boletos/1ª parcela dos contatos do período)
   let qE = sb.from('lancamentos').select('id', { count: 'exact', head: true }).eq('entrega_boleto', 'Pessoalmente (Poupatempo)').gte('data_contato', p.ini).lte('data_contato', p.fim);
   if (func) qE = qE.eq('funcionario_id', func); else if (!ehSup()) qE = qE.eq('funcionario_id', S.user.id);
+  if (tc === 'Não informado') qE = qE.is('tipo_cobranca', null); else if (tc) qE = qE.eq('tipo_cobranca', tc);
   const { count: nPessoal } = await qE;
   ULTIMO.entreguesPessoalmente = nPessoal || 0;
   destruirGraficos();
@@ -886,7 +903,7 @@ async function gerarRelatorio(f) {
 
   box.innerHTML = `
   <div class="card"><h1 style="margin:0">Relatório de cobranças · ${esc(p.rotulo)}</h1>
-    <p class="sub">${esc(nomeFunc)} · período de ${fmtData(p.ini)} a ${fmtData(p.fim)} · gerado em ${new Date().toLocaleString('pt-BR')}</p>
+    <p class="sub">${esc(nomeFunc)}${tcRot ? ` · cobrança ${esc(tcRot)}` : ''} · período de ${fmtData(p.ini)} a ${fmtData(p.fim)} · gerado em ${new Date().toLocaleString('pt-BR')}</p>
     <p class="dica">Contatos, ações e resultados contam pela <strong>data do contato</strong>; pagamentos e valor arrecadado, pela <strong>data do pagamento</strong>.</p>
     ${alertas.map(a => `<div class="aviso atencao">${esc(a)}</div>`).join('')}</div>
   <div class="kpis">
@@ -1021,6 +1038,20 @@ function htmlFunil(F, T) {
   </div>`;
 }
 
+// Padrão (3+ parcelas vencidas) × Antecipada (menos de 3): mesma leitura de resultado e esforço das combinações
+function htmlTipoCob(rows, { peq, conv, dias, vazio }) {
+  const comp = rows.filter(x => x.tipo !== 'Não informado');
+  const porAcao = x => div0(x.valor, x.acoes);
+  const melhor = comp.length > 1 ? comp.filter(x => x.pagos > 0).sort((a, b) => div0(b.pagos, b.contatos) - div0(a.pagos, a.contatos))[0] : null;
+  const ni = rows.find(x => x.tipo === 'Não informado');
+  return `<div class="card"><h3>Tipo de cobrança — padrão × antecipada</h3>
+    <p class="dica"><strong>Padrão</strong> = acordo com 3 ou mais parcelas vencidas; <strong>Antecipada</strong> = cobrado com menos de 3 parcelas vencidas. Mesmas medidas da tabela de combinações (ação = cada meio usado).${ni ? ` "Não informado" reúne ${NUM.format(ni.contatos)} lançamento(s) sem o tipo — em geral os anteriores a 29/10/2026 — e fica fora da comparação.` : ''}</p>
+    <div class="tabela-wrap"><table><thead><tr><th>Tipo</th><th class="num">Contatos</th><th class="num">Ações</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Valor</th><th class="num">R$ por ação</th><th class="num">Ações por pagamento</th><th class="num">Em andamento</th><th class="num">Sem sucesso</th><th class="num">Tempo até pagar</th></tr></thead><tbody>
+      ${rows.map(x => `<tr class="${melhor && x.tipo === melhor.tipo ? 'linha-destaque' : ''}${x.tipo === 'Não informado' ? ' dica' : ''}"><td>${esc(x.tipo === 'Padrão' ? 'Padrão (3+)' : x.tipo === 'Antecipada' ? 'Antecipada (<3)' : x.tipo)}${peq(x.contatos)}</td><td class="num">${NUM.format(x.contatos)}</td><td class="num">${NUM.format(x.acoes)}</td><td class="num">${NUM.format(x.pagos)}</td><td class="num"><strong>${conv(x.pagos, x.contatos)}</strong></td><td class="num">${BRL.format(x.valor)}</td><td class="num">${x.acoes ? BRL.format(porAcao(x)) : '—'}</td><td class="num">${x.pagos && x.acoes ? DEC.format(div0(x.acoes, x.pagos)) : '—'}</td><td class="num">${NUM.format(x.andamento)}</td><td class="num">${NUM.format(x.sem_sucesso)}</td><td class="num">${dias(x.dias_medio)}</td></tr>`).join('') || vazio(11)}
+    </tbody></table></div>
+    <p class="dica">Ao comparar, lembre que os casos antecipados costumam ter valores menores em aberto; olhe a conversão e as ações por pagamento junto com o valor. Casos "em andamento" ainda podem mudar o resultado.</p></div>`;
+}
+
 function desenharEficacia(E, { css, barra, eixos }) {
   const box = $('#eficacia'); if (!box) return;
   const T = E.total;
@@ -1076,6 +1107,7 @@ function desenharEficacia(E, { css, barra, eixos }) {
   <div class="card"><h3>Resultado por meio utilizado</h3><div class="tabela-wrap"><table><thead><tr><th>Meio</th><th class="num">Contatos</th><th class="num">Responderam</th><th class="num">Taxa de resposta</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Sem sucesso</th><th class="num">Valor recebido</th><th class="num">Tempo até pagar</th></tr></thead><tbody>
     ${E.por_meio.map(m => `<tr><td>${esc(m.meio)}${peq(m.contatos)}</td><td class="num">${NUM.format(m.contatos)}</td><td class="num">${NUM.format(m.respondeu)}</td><td class="num">${conv(m.respondeu, m.contatos)}</td><td class="num">${NUM.format(m.pagos)}</td><td class="num"><strong>${conv(m.pagos, m.contatos)}</strong></td><td class="num">${NUM.format(m.sem_sucesso)}</td><td class="num">${BRL.format(m.valor)}</td><td class="num">${dias(m.dias_medio)}</td></tr>`).join('') || vazio(9)}
   </tbody></table></div></div>
+  ${htmlTipoCob(E.por_tipo || [], { peq, conv, dias, vazio })}
   <div class="card"><h3>Combinações de meios — resultado e esforço</h3>
     <p class="dica">Exatamente quais meios foram usados no mesmo contato, em qualquer ordem (o 1º contato pode ser WhatsApp, SMS ou ligação). <strong>Ação</strong> = cada meio usado (WhatsApp, SMS, ligação, agendamento). <strong>R$ por ação</strong> mostra quanto cada tentativa trouxe; <strong>ações por pagamento</strong>, quanto trabalho custou cada pagamento. Ordenado pelo melhor retorno por ação.</p>
     <div class="tabela-wrap"><table><thead><tr><th>Combinação</th><th class="num">Contatos</th><th class="num">Ações</th><th class="num">Pagos</th><th class="num">Conversão</th><th class="num">Valor</th><th class="num">R$ por ação</th><th class="num">Ações por pagamento</th><th class="num">Tempo até pagar</th></tr></thead><tbody>
@@ -1121,7 +1153,7 @@ function baixarCsv() {
   const { R, p, nomeFunc, serie, porDia } = ULTIMO; const T = R.totais;
   const n = v => String(v).replace('.', ',');
   const L = [];
-  L.push(['Relatório de cobranças', p.rotulo], ['Funcionário', nomeFunc], ['Período', `${fmtData(p.ini)} a ${fmtData(p.fim)}`], []);
+  L.push(['Relatório de cobranças', p.rotulo], ['Funcionário', nomeFunc], ['Tipo de cobrança', ULTIMO.tcRot || 'Todos'], ['Período', `${fmtData(p.ini)} a ${fmtData(p.fim)}`], []);
   L.push(['Indicador', 'Valor']);
   [['Contatos', T.contatos], ['Dias trabalhados', T.dias], ['WhatsApp', T.whatsapp], ['SMS', T.sms], ['Ligações', T.ligacoes], ['Agendamentos', T.agendamentos],
    ['Boletos gerados', T.boletos], ['Boletos entregues pessoalmente (Poupatempo)', ULTIMO.entreguesPessoalmente || 0], ['Valor dos boletos gerados', n(T.valor_boletos || 0)], ['Contatos do período já pagos', T.pagos_contatos || 0], ['Pagamentos no período (data do pagamento)', T.pagos], ['Em andamento', T.andamento], ['Sem sucesso', T.revogados], ['Outros', T.outros], ['Sem situação', T.sem_situacao],
@@ -1153,6 +1185,10 @@ function baixarCsv() {
     E.por_meio.forEach(m => L.push([m.meio, m.contatos, m.respondeu, pc(m.respondeu, m.contatos), m.pagos, pc(m.pagos, m.contatos), m.sem_sucesso, n(m.valor), m.dias_medio == null ? '' : n(m.dias_medio)]));
     L.push([], ['Meio', 'Resultado do contato', 'Contatos', 'Pagos', 'Conversão (%)']);
     E.por_resposta.forEach(x => L.push([x.meio, x.resp, x.contatos, x.pagos, pc(x.pagos, x.contatos)]));
+    if (E.por_tipo) {
+      L.push([], ['Tipo de cobrança', 'Contatos', 'Ações', 'Pagos', 'Conversão (%)', 'Valor', 'R$ por ação', 'Ações por pagamento', 'Em andamento', 'Sem sucesso', 'Dias até pagar (média)']);
+      E.por_tipo.forEach(x => L.push([x.tipo, x.contatos, x.acoes, x.pagos, pc(x.pagos, x.contatos), n(x.valor), x.acoes ? n(div0(x.valor, x.acoes).toFixed(2)) : '', x.pagos ? n(div0(x.acoes, x.pagos).toFixed(1)) : '', x.andamento, x.sem_sucesso, x.dias_medio == null ? '' : n(x.dias_medio)]));
+    }
     L.push([], ['Combinação de meios', 'Contatos', 'Ações', 'Pagos', 'Conversão (%)', 'Valor', 'R$ por ação', 'Ações por pagamento', 'Dias até pagar (média)']);
     E.combinacoes.forEach(c => { const a = c.qtd_meios * c.contatos; L.push([c.combinacao, c.contatos, a, c.pagos, pc(c.pagos, c.contatos), n(c.valor), a ? n(div0(c.valor, a).toFixed(2)) : '', c.pagos ? n(div0(a, c.pagos).toFixed(1)) : '', c.dias_medio == null ? '' : n(c.dias_medio)]); });
     L.push([], ['Fonte do telefone', 'Contatos', 'Resposta (%)', 'Contato falho (%)', 'Pagos', 'Conversão (%)', 'Valor']);
