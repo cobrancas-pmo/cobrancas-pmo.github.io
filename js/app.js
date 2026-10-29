@@ -28,6 +28,7 @@ const OPC = {
 const RE_ID = /^[0-9A-Za-z./-]{1,30}$/;
 const ICO_CAL = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>';
 // Tipo de cobrança: Padrão = acordo com 3 ou mais parcelas vencidas; Antecipada = menos de 3 vencidas
+const SIT_ANTECIPADA = 'ANTECIPADA SEM ÊXITO';   // encerra a cobrança antecipada sem enviar para cancelamento
 const TIPOS_COB = [['Padrão', 'Padrão — 3 ou mais parcelas vencidas', 'Padrão (3+)'], ['Antecipada', 'Antecipada — menos de 3 parcelas vencidas', 'Antecipada (<3)']];
 const optTiposCob = (sel = '', comNaoInf = true) => `<option value="">Todos</option>${TIPOS_COB.map(([v, , c]) => `<option value="${v}" ${v === sel ? 'selected' : ''}>${esc(c)}</option>`).join('')}${comNaoInf ? `<option value="Não informado" ${sel === 'Não informado' ? 'selected' : ''}>Não informado</option>` : ''}`;
 const testaTipoCob = (r, t) => !t || (t === 'Não informado' ? !r.tipo_cobranca : r.tipo_cobranca === t);
@@ -449,7 +450,7 @@ async function telaLancar(params) {
     } else f.data_pagamento.value = '';
   });
   f.id_parcelamento.addEventListener('blur', () => verificarDuplicado(f));
-  for (const nm of ['tipo_cobranca', 'meio_acordo']) f[nm].addEventListener('change', () => f[nm].removeAttribute('aria-invalid'));
+  for (const nm of ['tipo_cobranca', 'meio_acordo', 'situacao']) f[nm].addEventListener('change', () => { f.tipo_cobranca.removeAttribute('aria-invalid'); f[nm].removeAttribute('aria-invalid'); });
   for (const nm of ['valor_pago', 'valor_boleto', 'valor_acordo']) f[nm].addEventListener('blur', () => { const v = parseValor(f[nm].value); if (v != null && !Number.isNaN(v)) f[nm].value = fmtValorInput(v); });
 
   f.addEventListener('submit', async e => {
@@ -478,6 +479,10 @@ async function telaLancar(params) {
     // campos obrigatórios para os relatórios de eficácia: sem eles o lançamento não é salvo
     if (!o.tipo_cobranca) { f.tipo_cobranca.setAttribute('aria-invalid', 'true'); f.tipo_cobranca.focus(); return toast('Não foi salvo: informe o Tipo de cobrança (Padrão — 3 ou mais parcelas vencidas, ou Antecipada — menos de 3).', true); }
     if (aceitaMeio(o.situacao) && !o.meio_acordo) { f.meio_acordo.setAttribute('aria-invalid', 'true'); f.meio_acordo.focus(); return toast('Não foi salvo: com esta situação, informe "Onde o acordo foi fechado" (o contato em que o contribuinte aceitou pagar).', true); }
+    // cobrança antecipada (menos de 3 parcelas vencidas) não pode ir para cancelamento; ANTECIPADA SEM ÊXITO é só para ela
+    const sitSel = S.situacoes.find(x => x.codigo === o.situacao);
+    if (o.tipo_cobranca === 'Antecipada' && sitSel && sitSel.gera_cancelamento) { f.situacao.setAttribute('aria-invalid', 'true'); f.situacao.focus(); return toast(`Não foi salvo: cobrança antecipada (menos de 3 parcelas vencidas) não pode ir para cancelamento. Se o contribuinte não regularizou, use a situação "${SIT_ANTECIPADA}".`, true); }
+    if (o.situacao === SIT_ANTECIPADA && o.tipo_cobranca !== 'Antecipada') { f.situacao.setAttribute('aria-invalid', 'true'); f.situacao.focus(); return toast(`Não foi salvo: a situação "${SIT_ANTECIPADA}" é só para o Tipo de cobrança "Antecipada" (menos de 3 parcelas vencidas).`, true); }
     if (o.origem && !RE_ID.test(o.origem)) return toast('Origem/inscrição: use só números/letras, sem espaços.', true);
     if (Number.isNaN(o.valor_pago)) return toast('Valor pago inválido. Exemplo: 388,15', true);
     const oQue = ehParc ? 'da 1ª parcela' : 'do boleto';
