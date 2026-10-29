@@ -360,7 +360,7 @@ async function telaLancar(params) {
       <label class="campo">Setor<select name="setor">${optList(setores)}</select></label>
       <label class="campo">Origem / inscrição<input name="origem" maxlength="30" placeholder="ex.: 62902"></label>
       <label class="campo">Fonte do contato<select name="fonte_contato">${optList(OPC.fonte)}</select></label>
-      <label class="campo largo">Tipo de cobrança<select name="tipo_cobranca">${TIPOS_COB.map(([v, rot], i) => `<option value="${v}" ${i === 0 ? 'selected' : ''}>${esc(rot)}</option>`).join('')}<option value="">— Não informado</option></select></label>
+      <label class="campo largo">Tipo de cobrança<select name="tipo_cobranca"><option value="" selected>— Não informado</option>${TIPOS_COB.map(([v, rot]) => `<option value="${v}">${esc(rot)}</option>`).join('')}</select></label>
     </div><div id="avisoDup"></div></fieldset>
     <fieldset><legend>Ações realizadas</legend><div class="grade">
       <label class="campo">WhatsApp<select name="whatsapp">${optList(OPC.whatsapp)}</select></label>
@@ -489,6 +489,9 @@ async function telaLancar(params) {
     } else o.data_pagamento = null;
     if (cat === 'Pago' && o.valor_pago == null && !confirm('Situação "pago" sem valor informado. Salvar mesmo assim?')) return;
     if (cat !== 'Pago' && o.valor_pago != null && !confirm('Há valor pago, mas a situação não é de pagamento. Salvar mesmo assim?')) return;
+    // campos que alimentam os relatórios de eficácia: avisa se ficaram sem preencher (Cancelar = volta ao campo)
+    if (!o.tipo_cobranca && !confirm('O tipo de cobrança não foi informado (Padrão — 3 ou mais parcelas vencidas, ou Antecipada — menos de 3).\n\nOK = salvar como "Não informado"\nCancelar = voltar e escolher')) { f.tipo_cobranca.focus(); return; }
+    if (aceitaMeio(o.situacao) && !o.meio_acordo && !confirm('"Onde o acordo foi fechado" não foi informado (o contato em que o contribuinte aceitou pagar).\n\nOK = salvar sem informar\nCancelar = voltar e escolher')) { f.meio_acordo.focus(); return; }
     // (o 1º contato pode ser por WhatsApp, SMS ou ligação: não há mais aviso de WhatsApp vazio)
     if (o.whatsapp === 'Enviado' && (cat === 'Pago' || o.boleto_emitido) && f._wppConferido !== (f.registro.value || 'novo')) {
       f._wppConferido = f.registro.value || 'novo';
