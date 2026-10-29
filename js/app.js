@@ -805,8 +805,13 @@ async function telaBuscar(params = {}) {
 }
 
 // ---------------------------------------------------------------- RELATÓRIOS
-function periodo(tipo, ano, n, ini, fim) {
-  ano = Number(ano); n = Number(n);
+function periodo(tipo, ano, n, ini, fim, corte = 0) {
+  ano = Number(ano); n = Number(n); corte = Number(corte) || 0;
+  // mensal com dia de fechamento: "outubro fechando no dia 10" = 11/09 a 10/10
+  if (tipo === 'mes' && corte >= 1 && corte <= 28) {
+    const fimC = `${ano}-${pad(n)}-${pad(corte)}`, iniC = addDias(`${n === 1 ? ano - 1 : ano}-${pad(n === 1 ? 12 : n - 1)}-${pad(corte)}`, 1);
+    return { ini: iniC, fim: fimC, rotulo: `${MESES[n - 1].toUpperCase()}/${ano} (${fmtData(iniC).slice(0, 5)} a ${fmtData(fimC).slice(0, 5)})` };
+  }
   if (tipo === 'personalizado') return { ini, fim, rotulo: `${fmtData(ini)} a ${fmtData(fim)}` };
   if (tipo === 'dia') return { ini, fim: ini, rotulo: ini ? `DIA ${fmtData(ini)} (${diaSemana(ini).toUpperCase()})` : '' };
   let m1 = 1, m2 = 12, rot = `ANO DE ${ano}`;
@@ -828,6 +833,7 @@ function telaRelatorios(params) {
       <option value="ano">Anual</option><option value="personalizado">Personalizado</option></select></label>
     <label class="campo" id="cAno">Ano<select name="ano">${anos.map(y => `<option>${y}</option>`).join('')}</select></label>
     <label class="campo" id="cNum">Mês<select name="n"></select></label>
+    <label class="campo" id="cCorte">Fecha no dia<select name="corte"><option value="0">Último dia do mês</option>${Array.from({ length: 28 }, (_, i) => `<option value="${i + 1}">Dia ${i + 1} (de ${i + 2} do mês anterior a ${i + 1})</option>`).join('')}</select></label>
     <div class="campo" id="cDia" hidden><span>Dia</span><div class="barra-dia">
       <button class="btn" type="button" id="relDiaAnt" title="Dia anterior" aria-label="Dia anterior">‹</button>
       <input type="date" name="dia" aria-label="Dia do relatório">
@@ -842,7 +848,7 @@ function telaRelatorios(params) {
   const f = $('#fRel');
   const ajustarN = () => {
     const t = f.tipo.value; const ops = { mes: MESES.map((m, i) => [i + 1, m]), trimestre: [1, 2, 3, 4].map(i => [i, `${i}º trimestre`]), semestre: [[1, '1º semestre'], [2, '2º semestre']] }[t];
-    $('#cNum').hidden = !ops; $('#cAno').hidden = t === 'personalizado' || t === 'dia'; $('#cIni').hidden = $('#cFim').hidden = t !== 'personalizado'; $('#cDia').hidden = t !== 'dia';
+    $('#cNum').hidden = !ops; $('#cCorte').hidden = t !== 'mes'; $('#cAno').hidden = t === 'personalizado' || t === 'dia'; $('#cIni').hidden = $('#cFim').hidden = t !== 'personalizado'; $('#cDia').hidden = t !== 'dia';
     if (ops) {
       $('#cNum').firstChild.textContent = { mes: 'Mês', trimestre: 'Trimestre', semestre: 'Semestre' }[t];
       const atual = { mes: ma, trimestre: Math.ceil(ma / 3), semestre: Math.ceil(ma / 6) }[t];
@@ -850,6 +856,9 @@ function telaRelatorios(params) {
     }
   };
   f.tipo.addEventListener('change', ajustarN); ajustarN();
+  // dia de fechamento do mensal fica lembrado neste navegador
+  try { const c = localStorage.getItem('rel_corte'); if (c && [...f.corte.options].some(o => o.value === c)) f.corte.value = c; } catch (_) {}
+  f.corte.addEventListener('change', () => { try { localStorage.setItem('rel_corte', f.corte.value); } catch (_) {} });
   f.ini.value = `${ya}-${pad(ma)}-01`; f.fim.value = hoje(); f.dia.value = hoje();
   // no relatório diário, trocar o dia já gera o relatório
   const irDia = d => { if (d) { f.dia.value = d; gerarRelatorio(f); } };
@@ -865,7 +874,7 @@ function telaRelatorios(params) {
 
 let ULTIMO = null;
 async function gerarRelatorio(f) {
-  const p = f.tipo.value === 'dia' ? periodo('dia', 0, 0, f.dia.value) : periodo(f.tipo.value, f.ano.value, f.n.value, f.ini.value, f.fim.value);
+  const p = f.tipo.value === 'dia' ? periodo('dia', 0, 0, f.dia.value) : periodo(f.tipo.value, f.ano.value, f.n.value, f.ini.value, f.fim.value, f.corte.value);
   if (!p.ini || !p.fim || p.ini > p.fim) return toast('Período inválido.', true);
   const func = f.func ? f.func.value || null : null;
   const nomeFunc = func ? (S.perfis.find(x => x.id === func)?.nome || '') : (ehSup() ? 'TODA A EQUIPE' : S.perfil.nome);
