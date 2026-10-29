@@ -436,7 +436,7 @@ async function telaLancar(params) {
   f._setTipo = setTipo;
   f.querySelectorAll('[name=tipo_acordo]').forEach(r => r.addEventListener('change', () => setTipo(tipoAtual())));
   f._ajustarMeio = ajustarMeio;
-  const limpar = () => { f.reset(); f._wppConferido = null; ajustarMeio(); setTipo(''); f.registro.value = ''; $('#tituloForm').textContent = 'Novo lançamento'; $('#btnSalvar').textContent = 'Salvar lançamento'; $('#avisoDup').innerHTML = ''; $('#descSit').textContent = ''; };
+  const limpar = () => { f.reset(); f.querySelectorAll('[aria-invalid]').forEach(x => x.removeAttribute('aria-invalid')); f._wppConferido = null; ajustarMeio(); setTipo(''); f.registro.value = ''; $('#tituloForm').textContent = 'Novo lançamento'; $('#btnSalvar').textContent = 'Salvar lançamento'; $('#avisoDup').innerHTML = ''; $('#descSit').textContent = ''; };
   $('#btnLimpar').addEventListener('click', limpar);
   f.situacao.addEventListener('change', () => {
     $('#descSit').textContent = S.situacoes.find(s => s.codigo === f.situacao.value)?.descricao || '';
@@ -448,6 +448,7 @@ async function telaLancar(params) {
     } else f.data_pagamento.value = '';
   });
   f.id_parcelamento.addEventListener('blur', () => verificarDuplicado(f));
+  for (const nm of ['tipo_cobranca', 'meio_acordo']) f[nm].addEventListener('change', () => f[nm].removeAttribute('aria-invalid'));
   for (const nm of ['valor_pago', 'valor_boleto', 'valor_acordo']) f[nm].addEventListener('blur', () => { const v = parseValor(f[nm].value); if (v != null && !Number.isNaN(v)) f[nm].value = fmtValorInput(v); });
 
   f.addEventListener('submit', async e => {
@@ -473,6 +474,9 @@ async function telaLancar(params) {
     if (sitNovoAcordo(o.situacao) && o.valor_acordo == null && !confirm('Parcelamento efetivado sem o valor total do novo acordo. Salvar mesmo assim?')) return;
     if (!RE_ID.test(o.id_parcelamento)) { f.id_parcelamento.setAttribute('aria-invalid', 'true'); f.id_parcelamento.focus(); return toast('Informe o Id do parcelamento (só números/letras, sem espaços).', true); }
     f.id_parcelamento.removeAttribute('aria-invalid');
+    // campos obrigatórios para os relatórios de eficácia: sem eles o lançamento não é salvo
+    if (!o.tipo_cobranca) { f.tipo_cobranca.setAttribute('aria-invalid', 'true'); f.tipo_cobranca.focus(); return toast('Não foi salvo: informe o Tipo de cobrança (Padrão — 3 ou mais parcelas vencidas, ou Antecipada — menos de 3).', true); }
+    if (aceitaMeio(o.situacao) && !o.meio_acordo) { f.meio_acordo.setAttribute('aria-invalid', 'true'); f.meio_acordo.focus(); return toast('Não foi salvo: com esta situação, informe "Onde o acordo foi fechado" (o contato em que o contribuinte aceitou pagar).', true); }
     if (o.origem && !RE_ID.test(o.origem)) return toast('Origem/inscrição: use só números/letras, sem espaços.', true);
     if (Number.isNaN(o.valor_pago)) return toast('Valor pago inválido. Exemplo: 388,15', true);
     const oQue = ehParc ? 'da 1ª parcela' : 'do boleto';
@@ -489,9 +493,6 @@ async function telaLancar(params) {
     } else o.data_pagamento = null;
     if (cat === 'Pago' && o.valor_pago == null && !confirm('Situação "pago" sem valor informado. Salvar mesmo assim?')) return;
     if (cat !== 'Pago' && o.valor_pago != null && !confirm('Há valor pago, mas a situação não é de pagamento. Salvar mesmo assim?')) return;
-    // campos que alimentam os relatórios de eficácia: avisa se ficaram sem preencher (Cancelar = volta ao campo)
-    if (!o.tipo_cobranca && !confirm('O tipo de cobrança não foi informado (Padrão — 3 ou mais parcelas vencidas, ou Antecipada — menos de 3).\n\nOK = salvar como "Não informado"\nCancelar = voltar e escolher')) { f.tipo_cobranca.focus(); return; }
-    if (aceitaMeio(o.situacao) && !o.meio_acordo && !confirm('"Onde o acordo foi fechado" não foi informado (o contato em que o contribuinte aceitou pagar).\n\nOK = salvar sem informar\nCancelar = voltar e escolher')) { f.meio_acordo.focus(); return; }
     // (o 1º contato pode ser por WhatsApp, SMS ou ligação: não há mais aviso de WhatsApp vazio)
     if (o.whatsapp === 'Enviado' && (cat === 'Pago' || o.boleto_emitido) && f._wppConferido !== (f.registro.value || 'novo')) {
       f._wppConferido = f.registro.value || 'novo';

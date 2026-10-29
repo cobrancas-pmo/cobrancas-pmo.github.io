@@ -96,7 +96,7 @@ input, select, textarea { font: inherit; font-size: .95rem; color: var(--ink); b
   border: 1px solid var(--line); border-radius: 8px; padding: .5rem .6rem; width: 100%; min-width: 0; }
 textarea { resize: vertical; min-height: 64px; }
 input:disabled, select:disabled { background: var(--surface-2); color: var(--muted); }
-input[aria-invalid="true"] { border-color: var(--bad); }
+input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--bad); }
 fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: .8rem .9rem 1rem; margin: 0 0 .9rem; }
 legend { font-weight: 700; font-size: .85rem; color: var(--primary); padding: 0 .35rem; text-transform: uppercase; letter-spacing: .4px; }
 .obrig::after { content: " *"; color: var(--bad); }
