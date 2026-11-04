@@ -7,7 +7,7 @@
   const SAL_HASH = 'cobrancas-pmo|';       // mesmo prefixo será usado na ligação com o CWMKT
   const RE_ID = /^[0-9A-Za-z./-]{1,30}$/;
 
-  const norm = s => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const norm = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
   // nomes de coluna aceitos (comparados sem acento, maiúsculas, espaços ou pontuação)
   const COLS = {
     id: ['parcelamento', 'idparcelamento', 'identificacaodivida'],

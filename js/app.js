@@ -1262,7 +1262,7 @@ const alternaRel = ver => `<div class="alterna nao-imprimir" role="tablist" aria
   <a href="#/relatorios" role="tab" aria-selected="${ver !== 'campanhas'}" class="${ver !== 'campanhas' ? 'on' : ''}">Atendimentos</a>
   <a href="#/relatorios?ver=campanhas" role="tab" aria-selected="${ver === 'campanhas'}" class="${ver === 'campanhas' ? 'on' : ''}">Campanhas</a></div>`;
 const primeiroNome = n => String(n || '').trim().split(/\s+/)[0] || 'Cobrador';
-const semAcento = s => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '');
+const semAcento = s => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 // ---------- Relatórios → Campanhas ----------
 async function telaCampanhas(params) {
@@ -1895,8 +1895,12 @@ async function telaAdmin() {
     <p class="dica">"Gera cancelamento": ao escolher a situação, o caso entra automaticamente na fila do relatório semanal à Recuperação de Ativos. "Confere vencimento": o sistema avisa para conferir o pagamento ${PRAZO_UTEIS} dias úteis após o vencimento do boleto. "Novo acordo": situação de novo parcelamento efetivado — libera os campos valor total e nº do novo parcelamento (use com a categoria "Pago"). "Confere efetivação": a partir do dia seguinte, o sistema avisa para conferir se o parcelamento foi efetivado.</p></div>
   <div class="card"><h2>Setores</h2><div class="tabela-wrap"><table><thead><tr><th>Setor</th><th class="num">Ordem</th><th>Ativo</th><th></th></tr></thead><tbody id="tbSet"></tbody></table></div>
     <form class="linha" id="fNovoSet" style="margin-top:.8rem"><label class="campo">Novo setor<input name="nome" maxlength="40" required></label><button class="btn prim">Adicionar</button></form></div>
+  <details class="card" id="cardCwmkt"><summary><h2 style="display:inline">Ligação com o CWMKT (WhatsApp)</h2> <span class="dica">reconhece quem veio das campanhas e passa a conversa ao cobrador</span></summary>
+    <p class="dica" style="margin-top:.6rem">Confere se a chave do CWMKT está cadastrada, se o time e os cobradores foram encontrados e mostra os últimos avisos recebidos.</p>
+    <button class="btn" type="button" id="btnTesteCwmkt">Testar ligação</button><div id="resCwmkt"></div></details>
   <div class="card"><h2>Auditoria (últimas 200 alterações)</h2><div class="tabela-wrap"><table><thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Tabela</th><th>Registro</th><th>Campos alterados</th></tr></thead><tbody id="tbAud"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody></table></div></div>`;
   await carregarTabelas();
+  $('#btnTesteCwmkt').addEventListener('click', testarCwmkt);
   // usuários
   const tbU = $('#tbUsu');
   const usus = [...S.perfis].sort((a, b) => (a.ativo - b.ativo) || a.nome.localeCompare(b.nome));
@@ -1986,6 +1990,35 @@ async function telaAdmin() {
     return `<tr><td>${new Date(a.quando).toLocaleString('pt-BR')}</td><td>${esc(nomes[a.usuario] || (a.usuario ? '—' : 'sistema'))}</td>
       <td>${({ INSERT: 'Inclusão', UPDATE: 'Alteração', DELETE: 'Exclusão' })[a.acao] || esc(a.acao)}</td><td>${esc(a.tabela)}</td><td>${esc(reg)}</td><td class="dica">${esc(campos)}</td></tr>`;
   }).join('') || '<tr><td colspan="6" class="vazio">Nenhum registro.</td></tr>';
+}
+
+async function testarCwmkt() {
+  const box = $('#resCwmkt'); box.innerHTML = '<p class="carregando">Testando…</p>';
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    const r = await fetch(`${CFG.SUPABASE_URL}/functions/v1/cwmkt?acao=teste`, { method: 'POST', headers: { Authorization: `Bearer ${session.access_token}`, apikey: CFG.SUPABASE_KEY, 'Content-Type': 'application/json' }, body: '{}' });
+    const d = await r.json();
+    if (!r.ok) { box.innerHTML = `<div class="aviso erro">${esc(d.erro || 'Não foi possível testar.')}</div>`; return; }
+    const ok = (b, t) => `<li><span class="m ${b ? 'ok' : 'at'}">${b ? '✓' : '!'}</span><span>${t}</span></li>`;
+    const NOMES = { CWMKT_URL: 'endereço do CWMKT', CWMKT_TOKEN: 'chave de acesso (token) de um administrador do CWMKT', CWMKT_CONTA: 'número da conta do CWMKT' };
+    box.innerHTML = `<ul class="checks" style="margin-top:.8rem">
+      ${d.falta.length ? ok(false, `Falta cadastrar no Supabase (Edge Functions → Secrets): ${d.falta.map(f => `<b>${f}</b> (${NOMES[f] || f})`).join(', ')}.`) : ok(true, 'Configuração cadastrada.')}
+      ${d.erro_api ? ok(false, `O CWMKT recusou a consulta: ${esc(d.erro_api)}. Confira o endereço, o número da conta e a chave.`) : ''}
+      ${!d.falta.length && !d.erro_api ? ok(!!d.time, d.time ? `Time "<b>${esc(d.time.nome)}</b>" encontrado.` : `Time "${esc(d.time_nome)}" não encontrado. Times existentes: ${esc((d.times || []).join(', '))}.`) : ''}
+      ${!d.falta.length && !d.erro_api ? ok(true, d.tem_etiqueta_campanha ? 'Etiqueta "campanha" já existe.' : 'A etiqueta "campanha" será criada no primeiro retorno.') : ''}
+    </ul>
+    ${d.cobradores.length ? `<div class="tabela-wrap"><table><thead><tr><th>Cobrador no sistema</th><th>Agente no CWMKT</th><th>Etiqueta</th></tr></thead><tbody>${d.cobradores.map(c => `<tr><td>${esc(c.nome)}</td><td>${c.agente ? esc(c.agente) : '<span class="tag Revogado">não encontrado</span>'}</td><td>${c.etiqueta ? esc(c.etiqueta) : '<span class="dica">não encontrada</span>'}</td></tr>`).join('')}</tbody></table></div>
+      <p class="dica">O agente é encontrado pelo e-mail ou pelo nome; a etiqueta, pelo padrão "cobranças_nome".</p>` : ''}
+    <h3 style="margin-top:1rem">Endereço do webhook (colar no CWMKT)</h3>
+    <div class="linha"><input type="text" id="urlWebhook" readonly value="${esc(d.webhook)}" style="flex:1;min-width:0"><button class="btn" type="button" id="copiarWebhook">Copiar</button></div>
+    <p class="dica">No CWMKT: Configurações → Integrações → Webhooks → Adicionar. Marque os eventos <b>Mensagem criada</b>, <b>Status da conversa alterado</b> e <b>Conversa atualizada</b>. Não compartilhe este endereço: ele funciona como senha.</p>
+    <h3 style="margin-top:1rem">Últimos avisos recebidos</h3>
+    ${d.eventos.length ? `<div class="tabela-wrap"><table><thead><tr><th>Quando</th><th>Aviso</th><th class="num">Conversa</th><th>Resultado</th></tr></thead><tbody>${d.eventos.map(e => `<tr><td>${new Date(e.recebido).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</td><td>${esc(e.evento)}</td><td class="num">${e.conversa ?? ''}</td><td>${esc(e.resultado)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="dica">Nenhum aviso de campanha recebido ainda.</p>'}`;
+    $('#copiarWebhook').addEventListener('click', async () => {
+      const i = $('#urlWebhook');
+      try { await navigator.clipboard.writeText(i.value); toast('Endereço copiado.'); } catch (_) { i.select(); toast('Selecionado: use Ctrl+C.'); }
+    });
+  } catch (e) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(e))}</div>`; }
 }
 
 // ---------------------------------------------------------------- MINHA CONTA
