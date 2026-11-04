@@ -15,7 +15,7 @@ const CONTA = ENV('CWMKT_CONTA');                           // nº da conta (apa
 const TIME = ENV('CWMKT_TIME') || 'cobrança manual';         // time dos cobradores
 const CAIXA = ENV('CWMKT_CAIXA');                           // opcional: nº da caixa "Tributário Oficial"
 // times para onde o bot manda assuntos de cobrança: a conversa da campanha é puxada para o cobrador mesmo assim (separados por vírgula)
-const TIMES_ACEITOS = ENV('CWMKT_TIMES_ACEITOS').split(',').map(t => t.trim()).filter(Boolean);
+const TIMES_ACEITOS = ENV('CWMKT_TIMES_ACEITOS').split(/[,;]/).map(t => t.trim()).filter(Boolean);
 // senha que vai no endereço do webhook: a definida em CWMKT_WEBHOOK_TOKEN ou, se não houver, uma derivada da chave do projeto
 let WEBHOOK_TOKEN = ENV('CWMKT_WEBHOOK_TOKEN');
 const SEGREDO = ENV('CWMKT_SEGREDO');                       // opcional: segredo de assinatura do webhook
@@ -75,6 +75,8 @@ async function agenteDe(email: string | null, nome: string) {
   const mesmos = ags.filter(x => norm(x.name).split(' ')[0] === partes[0]);
   return mesmos.length === 1 ? mesmos[0] : null;
 }
+// time aceito: o nome do time contém o termo (ou o contrário), sem acento nem maiúsculas — "REFIS" aceita "refis 2026"
+const ehAceito = (nome: unknown) => { const n = norm(nome); return !!n && TIMES_ACEITOS.some(t => { const a = norm(t); return !!a && (n.includes(a) || a.includes(n)); }); };
 async function timeCobranca() { const n = norm(TIME); return (await times()).find(t => norm(t.name) === n) || null; }
 async function etiquetaDe(nome: string) {
   const p = norm(nome).split(' ')[0];
@@ -101,7 +103,7 @@ async function atribuir(conv: number, item: any): Promise<string> {
   if (status === 'resolved') return 'conversa já resolvida';
   await garantirEtiquetaCampanha();
   const tc = await timeCobranca();
-  const aceito = timeAtual && TIMES_ACEITOS.some(t => norm(t) === norm(timeAtual.name));
+  const aceito = timeAtual && ehAceito(timeAtual.name);
   if (timeAtual && tc && timeAtual.id !== tc.id && !aceito) {
     await addEtiquetas(conv, [ETIQ_CAMPANHA]);
     await db.rpc('cwmkt_marcar_atribuida', { p_conversa: conv });
@@ -238,7 +240,7 @@ async function listar(req: Request) {
     const ag = await agenteDe(eu.email, eu.nome);
     if (!ag) return json({ erro: `Não encontrei você (${eu.nome}) entre os agentes do CWMKT.` }, 200, cors);
     const tc = await timeCobranca();
-    const convs = (await conversasDoAgente(ag.id)).filter((c: any) => !tc || !c?.meta?.team || c.meta.team.id === tc.id)
+    const convs = (await conversasDoAgente(ag.id)).filter((c: any) => !tc || !c?.meta?.team || c.meta.team.id === tc.id || ehAceito(c.meta.team.name))
       .filter((c: any) => !CAIXA || String(c.inbox_id) === CAIXA);
     const vistos = new Set<number>();
     const conversas = convs.filter((c: any) => !vistos.has(c.id) && vistos.add(c.id)).map((c: any) => {
@@ -258,7 +260,7 @@ async function teste(req: Request, url: URL) {
   if (perfil.papel !== 'admin') return json({ erro: 'Somente o administrador.' }, 403, cors);
   await senhaWebhook();
   const falta = [['CWMKT_URL', BASE], ['CWMKT_TOKEN', TOKEN], ['CWMKT_CONTA', CONTA]].filter(x => !x[1]).map(x => x[0]);
-  const out: any = { falta, time_nome: TIME, times_aceitos: TIMES_ACEITOS, caixa: CAIXA || null, webhook: `${ENV('SUPABASE_URL')}/functions/v1/cwmkt?t=${WEBHOOK_TOKEN}`, cobradores: [], erro_api: null };
+  const out: any = { falta, time_nome: TIME, times_aceitos: TIMES_ACEITOS, times_aceitos_encontrados: [], caixa: CAIXA || null, webhook: `${ENV('SUPABASE_URL')}/functions/v1/cwmkt?t=${WEBHOOK_TOKEN}`, cobradores: [], erro_api: null };
   const { data: ev } = await db.from('cwmkt_eventos').select('recebido,evento,conversa,resultado').order('id', { ascending: false }).limit(15);
   out.eventos = ev || [];
   if (falta.length) return json(out, 200, cors);
@@ -267,6 +269,7 @@ async function teste(req: Request, url: URL) {
     const tc = await timeCobranca();
     out.time = tc ? { id: tc.id, nome: tc.name } : null;
     out.times = (await times()).map((t: any) => t.name);
+    out.times_aceitos_encontrados = out.times.filter((n: string) => ehAceito(n));
     out.tem_etiqueta_campanha = (await etiquetas()).some((l: any) => norm(l.title) === ETIQ_CAMPANHA);
     const { data: ps } = await db.from('perfis').select('id,nome,email,ativo').eq('ativo', true).order('nome');
     for (const p of ps || []) {
