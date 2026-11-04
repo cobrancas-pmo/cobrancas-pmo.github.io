@@ -14,6 +14,8 @@ const TOKEN = ENV('CWMKT_TOKEN');                           // token de acesso d
 const CONTA = ENV('CWMKT_CONTA');                           // nº da conta (aparece no endereço: /app/accounts/N/...)
 const TIME = ENV('CWMKT_TIME') || 'cobrança manual';         // time dos cobradores
 const CAIXA = ENV('CWMKT_CAIXA');                           // opcional: nº da caixa "Tributário Oficial"
+// times para onde o bot manda assuntos de cobrança: a conversa da campanha é puxada para o cobrador mesmo assim (separados por vírgula)
+const TIMES_ACEITOS = ENV('CWMKT_TIMES_ACEITOS').split(',').map(t => t.trim()).filter(Boolean);
 // senha que vai no endereço do webhook: a definida em CWMKT_WEBHOOK_TOKEN ou, se não houver, uma derivada da chave do projeto
 let WEBHOOK_TOKEN = ENV('CWMKT_WEBHOOK_TOKEN');
 const SEGREDO = ENV('CWMKT_SEGREDO');                       // opcional: segredo de assinatura do webhook
@@ -99,7 +101,8 @@ async function atribuir(conv: number, item: any): Promise<string> {
   if (status === 'resolved') return 'conversa já resolvida';
   await garantirEtiquetaCampanha();
   const tc = await timeCobranca();
-  if (timeAtual && tc && timeAtual.id !== tc.id) {
+  const aceito = timeAtual && TIMES_ACEITOS.some(t => norm(t) === norm(timeAtual.name));
+  if (timeAtual && tc && timeAtual.id !== tc.id && !aceito) {
     await addEtiquetas(conv, [ETIQ_CAMPANHA]);
     await db.rpc('cwmkt_marcar_atribuida', { p_conversa: conv });
     return `contribuinte escolheu outro setor (${String(timeAtual.name || '').slice(0, 40)}): só etiqueta`;
@@ -160,9 +163,12 @@ async function webhook(req: Request, url: URL) {
       let tipo = '';
       if (mt === 'incoming' || mt === '0') tipo = 'entrada';
       else if ((mt === 'outgoing' || mt === '1' || mt === 'template' || mt === '3') && (b.sender?.type === 'user' || b.sender?.type === 'User')) tipo = 'saida';
-      if (!tipo) return json({ ok: true, ignorado: 'mensagem do bot ou do sistema' });
+      // diagnóstico: só para conversas já ligadas a uma campanha (sem dados pessoais)
+      const ligada = convId ? (await db.from('campanha_itens').select('id').eq('cwmkt_conversa', convId).limit(1)).data?.length : 0;
+      const diag = `tipo=${mt} remetente=${b.sender?.type ?? '-'} fone=${phone ? 'sim' : 'não'} status=${conv.status ?? '-'}`;
+      if (!tipo) { if (ligada) await log(ev, convId, 'ignorada: ' + diag); return json({ ok: true, ignorado: 'mensagem do bot ou do sistema' }); }
       const item = await registrar(ev, convId, phone, tipo, quando);
-      if (!item) return json({ ok: true, ignorado: 'não é de campanha' });
+      if (!item) { if (ligada) await log(ev, convId, 'não reconhecida: ' + diag); return json({ ok: true, ignorado: 'não é de campanha' }); }
       let res = tipo === 'entrada' ? 'contribuinte respondeu' : 'cobrador mandou WhatsApp';
       if (tipo === 'entrada' && convId && !item.ja_atribuida && conv.status === 'open') res += ' · ' + await atribuir(convId, item);
       await log(ev, convId, `${item.campanha}: ${res}`);
@@ -252,7 +258,7 @@ async function teste(req: Request, url: URL) {
   if (perfil.papel !== 'admin') return json({ erro: 'Somente o administrador.' }, 403, cors);
   await senhaWebhook();
   const falta = [['CWMKT_URL', BASE], ['CWMKT_TOKEN', TOKEN], ['CWMKT_CONTA', CONTA]].filter(x => !x[1]).map(x => x[0]);
-  const out: any = { falta, time_nome: TIME, caixa: CAIXA || null, webhook: `${ENV('SUPABASE_URL')}/functions/v1/cwmkt?t=${WEBHOOK_TOKEN}`, cobradores: [], erro_api: null };
+  const out: any = { falta, time_nome: TIME, times_aceitos: TIMES_ACEITOS, caixa: CAIXA || null, webhook: `${ENV('SUPABASE_URL')}/functions/v1/cwmkt?t=${WEBHOOK_TOKEN}`, cobradores: [], erro_api: null };
   const { data: ev } = await db.from('cwmkt_eventos').select('recebido,evento,conversa,resultado').order('id', { ascending: false }).limit(15);
   out.eventos = ev || [];
   if (falta.length) return json(out, 200, cors);
