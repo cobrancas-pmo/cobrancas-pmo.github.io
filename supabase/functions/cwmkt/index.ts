@@ -187,12 +187,69 @@ async function webhook(req: Request, url: URL) {
   }
 }
 
-async function teste(req: Request, url: URL) {
+async function usuario(req: Request) {
   const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
   const { data: u } = await db.auth.getUser(jwt);
-  if (!u?.user) return json({ erro: 'Faça login no sistema.' }, 401, cors);
-  const { data: perfil } = await db.from('perfis').select('papel,ativo').eq('id', u.user.id).maybeSingle();
-  if (!perfil?.ativo || perfil.papel !== 'admin') return json({ erro: 'Somente o administrador.' }, 403, cors);
+  if (!u?.user) return null;
+  const { data: perfil } = await db.from('perfis').select('id,nome,email,papel,ativo').eq('id', u.user.id).maybeSingle();
+  return perfil?.ativo ? perfil : null;
+}
+
+// ---------- Puxar do CWMKT: conversas abertas/pendentes atribuídas ao cobrador ----------
+// O Id do parcelamento vem dos números escritos no nome do contato (ex.: "MARIA 103596 e 103600").
+// Nada é gravado aqui: a lista vai para a tela do cobrador, que escolhe o que lançar.
+async function conversasDoAgente(agId: number) {
+  const out: any[] = [];
+  const corpo = { payload: [
+    { attribute_key: 'assignee_id', filter_operator: 'equal_to', values: [agId], query_operator: 'and' },
+    { attribute_key: 'status', filter_operator: 'equal_to', values: ['open', 'pending'], query_operator: null }
+  ] };
+  try {
+    for (let pg = 1; pg <= 12; pg++) {
+      const r = await api(`/conversations/filter?page=${pg}`, { method: 'POST', body: JSON.stringify(corpo) });
+      const itens = lista(r?.payload ? r : r?.data);
+      out.push(...itens);
+      if (itens.length < 25) break;
+    }
+    return out;
+  } catch (_) {
+    // CWMKT sem o filtro: percorre as conversas abertas e pendentes e separa as do agente
+    for (const st of ['open', 'pending']) for (let pg = 1; pg <= 20; pg++) {
+      const r = await api(`/conversations?status=${st}&assignee_type=all&page=${pg}`);
+      const itens = lista(r?.data);
+      out.push(...itens.filter((c: any) => c?.meta?.assignee?.id === agId));
+      if (itens.length < 25) break;
+    }
+    return out;
+  }
+}
+async function listar(req: Request) {
+  const eu = await usuario(req);
+  if (!eu) return json({ erro: 'Faça login no sistema.' }, 401, cors);
+  if (!BASE || !TOKEN || !CONTA) return json({ erro: 'A ligação com o CWMKT ainda não foi configurada.' }, 200, cors);
+  cache = {};
+  try {
+    const ag = await agenteDe(eu.email, eu.nome);
+    if (!ag) return json({ erro: `Não encontrei você (${eu.nome}) entre os agentes do CWMKT.` }, 200, cors);
+    const tc = await timeCobranca();
+    const convs = (await conversasDoAgente(ag.id)).filter((c: any) => !tc || !c?.meta?.team || c.meta.team.id === tc.id)
+      .filter((c: any) => !CAIXA || String(c.inbox_id) === CAIXA);
+    const vistos = new Set<number>();
+    const conversas = convs.filter((c: any) => !vistos.has(c.id) && vistos.add(c.id)).map((c: any) => {
+      const nome = String(c?.meta?.sender?.name || '');
+      const ids = [...new Set((nome.match(/(?<!\d)\d{4,8}(?!\d)/g) || []))];
+      const ini = Number(c.created_at) || Number(c.timestamp) || 0;
+      return { conversa: c.id, contato: nome.slice(0, 120), ids, status: c.status, inicio: ini ? new Date(ini * 1000).toISOString() : null,
+               ultima: c.timestamp ? new Date(Number(c.timestamp) * 1000).toISOString() : null, etiquetas: (c.labels || []).slice(0, 6) };
+    }).sort((a: any, b: any) => String(b.ultima).localeCompare(String(a.ultima)));
+    return json({ agente: ag.name, conversas }, 200, cors);
+  } catch (e) { return json({ erro: 'O CWMKT não respondeu: ' + String((e as Error).message || e) }, 200, cors); }
+}
+
+async function teste(req: Request, url: URL) {
+  const perfil = await usuario(req);
+  if (!perfil) return json({ erro: 'Faça login no sistema.' }, 401, cors);
+  if (perfil.papel !== 'admin') return json({ erro: 'Somente o administrador.' }, 403, cors);
   await senhaWebhook();
   const falta = [['CWMKT_URL', BASE], ['CWMKT_TOKEN', TOKEN], ['CWMKT_CONTA', CONTA]].filter(x => !x[1]).map(x => x[0]);
   const out: any = { falta, time_nome: TIME, caixa: CAIXA || null, webhook: `${ENV('SUPABASE_URL')}/functions/v1/cwmkt?t=${WEBHOOK_TOKEN}`, cobradores: [], erro_api: null };
@@ -219,5 +276,6 @@ Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: cors });
   if (req.method !== 'POST') return json({ ok: false }, 405);
   if (url.searchParams.get('acao') === 'teste') return teste(req, url);
+  if (url.searchParams.get('acao') === 'listar') return listar(req);
   return webhook(req, url);
 });

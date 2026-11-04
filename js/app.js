@@ -350,11 +350,13 @@ async function telaLancar(params) {
       <button class="btn" id="diaProx" title="Próximo dia" aria-label="Próximo dia">›</button>
       <button class="btn" id="diaHoje">Hoje</button>
       <span class="dia-semana">${diaSemana(dia)}</span>
+      ${outro ? '' : '<button class="btn" type="button" id="btnPuxar" title="Trazer as conversas abertas do CWMKT atribuídas a você">Puxar do CWMKT</button>'}
     </div>
   </div>
   ${outro ? `<div class="aviso atencao aviso-como">Você está vendo e lançando em nome de <strong>${esc(nomePerfil(alvo))}</strong>. Os lançamentos novos contarão na produção dela(e); a auditoria registra que foram feitos por você. <a href="#" id="voltarMim">Voltar para os meus lançamentos</a></div>` : ''}
   <div id="avisoData" aria-live="polite"></div>
   <div class="kpis mini" id="resumoDia"></div>
+  <div id="puxarCwmkt"></div>
   <form class="card" id="fLanc" novalidate autocomplete="off">
     <div class="cab"><h2 id="tituloForm">Novo lançamento</h2><span class="dica">Campos com * são obrigatórios</span></div>
     <input type="hidden" name="registro">
@@ -413,6 +415,7 @@ async function telaLancar(params) {
   $('#diaAnt').addEventListener('click', () => irDia(addDias(dia, -1)));
   $('#diaProx').addEventListener('click', () => irDia(addDias(dia, 1)));
   $('#diaHoje').addEventListener('click', () => irDia(hoje()));
+  if ($('#btnPuxar')) $('#btnPuxar').addEventListener('click', () => puxarDoCwmkt(dia));
   if ($('#lancarComo')) $('#lancarComo').addEventListener('change', e => { S.lancarComo = e.target.value === S.user.id ? null : e.target.value; location.hash = `#/lancar?data=${dia}`; if (!params.editar) telaLancar({ data: dia }); });
   if ($('#voltarMim')) $('#voltarMim').addEventListener('click', e => { e.preventDefault(); S.lancarComo = null; location.hash = `#/lancar?data=${dia}`; if (!params.editar) telaLancar({ data: dia }); });
 
@@ -2019,6 +2022,71 @@ async function testarCwmkt() {
       try { await navigator.clipboard.writeText(i.value); toast('Endereço copiado.'); } catch (_) { i.select(); toast('Selecionado: use Ctrl+C.'); }
     });
   } catch (e) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(e))}</div>`; }
+}
+
+// ---------- Puxar do CWMKT: conversas abertas atribuídas ao cobrador viram lançamentos ----------
+// O Id vem dos números escritos no nome do contato. Nome e conversa não são gravados.
+async function puxarDoCwmkt(dia) {
+  const box = $('#puxarCwmkt');
+  if (box.firstElementChild) { box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="card"><p class="carregando">Buscando suas conversas no CWMKT…</p></div>';
+  let d;
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    const r = await fetch(`${CFG.SUPABASE_URL}/functions/v1/cwmkt?acao=listar`, { method: 'POST', headers: { Authorization: `Bearer ${session.access_token}`, apikey: CFG.SUPABASE_KEY, 'Content-Type': 'application/json' }, body: '{}' });
+    d = await r.json();
+  } catch (e) { d = { erro: msgErro(e) }; }
+  if (d.erro) { box.innerHTML = `<div class="card"><div class="aviso erro">${esc(d.erro)}</div><button class="btn" type="button" id="fecharPuxar">Fechar</button></div>`; $('#fecharPuxar').addEventListener('click', () => (box.innerHTML = '')); return; }
+  // lançamentos em aberto (sem situação ou em andamento) já existentes para esses Ids
+  const todosIds = [...new Set(d.conversas.flatMap(c => c.ids))];
+  const abertos = new Map();
+  if (todosIds.length) {
+    const { data: ls } = await sb.from('lancamentos').select('id,id_parcelamento,data_contato,situacao').eq('funcionario_id', S.user.id).in('id_parcelamento', todosIds).order('data_contato', { ascending: false });
+    for (const l of ls || []) if ((!l.situacao || catDe(l.situacao) === 'Em andamento') && !abertos.has(l.id_parcelamento)) abertos.set(l.id_parcelamento, l);
+  }
+  const conv = d.conversas.map(c => ({ ...c, novos: c.ids.filter(i => !abertos.has(i)) }));
+  const linha = c => {
+    const jaTodos = c.ids.length && !c.novos.length;
+    const marc = c.novos.length > 0;
+    return `<tr data-c="${c.conversa}" class="${marc ? '' : 'fora'}"><td class="cx"><input type="checkbox" ${marc ? 'checked' : ''} ${jaTodos ? 'disabled' : ''} aria-label="Importar conversa ${c.conversa}"></td>
+      <td>${esc(c.contato || '(sem nome)')}<div class="dica">conversa #${c.conversa} · ${c.status === 'pending' ? 'pendente' : 'aberta'}${c.ultima ? ' · última mensagem ' + new Date(c.ultima).toLocaleDateString('pt-BR') : ''}</div></td>
+      <td><input type="text" class="ids" value="${esc((c.novos.length ? c.novos : c.ids).join(' '))}" placeholder="Digite o Id" aria-label="Id(s) do parcelamento" style="width:11rem"></td>
+      <td>${c.ids.filter(i => abertos.has(i)).map(i => { const l = abertos.get(i); return `<a class="dica" href="#/lancar?data=${l.data_contato}&editar=${l.id}">${esc(i)}: já lançado em ${fmtData(l.data_contato)}</a>`; }).join('<br>') || '<span class="dica">—</span>'}</td></tr>`;
+  };
+  box.innerHTML = `<div class="card"><div class="cab"><h2>Puxar do CWMKT</h2><button class="btn" type="button" id="fecharPuxar">Fechar</button></div>
+    <p class="dica">Conversas abertas ou pendentes atribuídas a <b>${esc(d.agente)}</b> no CWMKT. O Id vem dos números do nome do contato; corrija ou digite quando faltar (vários Ids separados por espaço). Quem já tem lançamento em aberto não é duplicado.</p>
+    ${conv.length ? `<div class="linha" style="margin-bottom:.6rem">
+      <label class="campo">Tipo de cobrança dos importados<select id="tipoPuxar"><option value="">— escolha</option>${TIPOS_COB.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('')}</select></label>
+      <label class="campo">Data do contato<select id="dataPuxar"><option value="inicio">Dia em que a conversa começou</option><option value="dia">${fmtData(dia)} (dia aberto no Lançar)</option></select></label></div>
+    <div class="tabela-wrap tab-alta"><table><thead><tr><th class="cx"></th><th>Contato no CWMKT</th><th>Id(s) do parcelamento</th><th>No sistema</th></tr></thead><tbody id="tbPuxar">${conv.map(linha).join('')}</tbody></table></div>
+    <div class="acoes" style="justify-content:space-between;margin-top:.6rem"><span class="dica" id="resPuxar"></span><button class="btn prim" type="button" id="btnImportar">Lançar selecionados</button></div>`
+    : '<p class="vazio">Nenhuma conversa aberta atribuída a você no CWMKT.</p>'}</div>`;
+  $('#fecharPuxar').addEventListener('click', () => (box.innerHTML = ''));
+  if (!conv.length) return;
+  const contar = () => { const n = $$('#tbPuxar input[type=checkbox]:checked').length; $('#resPuxar').textContent = `${n} conversa(s) marcada(s) de ${conv.length}.`; };
+  $('#tbPuxar').addEventListener('change', e => { if (e.target.type === 'checkbox') e.target.closest('tr').classList.toggle('fora', !e.target.checked); contar(); });
+  contar();
+  $('#btnImportar').addEventListener('click', async ev => {
+    const tipo = $('#tipoPuxar').value;
+    if (!tipo) { $('#tipoPuxar').setAttribute('aria-invalid', 'true'); $('#tipoPuxar').focus(); return toast('Escolha o Tipo de cobrança dos importados.', true); }
+    const rows = []; const erros = [];
+    for (const tr of $$('#tbPuxar tr')) {
+      if (!tr.querySelector('input[type=checkbox]').checked) continue;
+      const c = conv.find(x => String(x.conversa) === tr.dataset.c);
+      const ids = tr.querySelector('.ids').value.replace(/\be\b/gi, ' ').trim().split(/[\s,;]+/).filter(Boolean);
+      if (!ids.length || ids.some(i => !RE_ID.test(i))) { erros.push(c.contato || '#' + c.conversa); continue; }
+      const data = $('#dataPuxar').value === 'inicio' && c.inicio ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(c.inicio)) : dia;
+      for (const id of ids) if (!abertos.has(id) && !rows.some(r => r.id_parcelamento === id)) rows.push({ funcionario_id: S.user.id, criado_por: S.user.id, data_contato: data > hoje() ? hoje() : data, id_parcelamento: id, whatsapp: 'Respondido', tipo_cobranca: tipo, observacoes: `Puxado do CWMKT (conversa #${c.conversa})` });
+    }
+    if (erros.length) return toast(`Id inválido ou vazio em: ${erros.slice(0, 3).join(', ')}${erros.length > 3 ? '…' : ''}`, true);
+    if (!rows.length) return toast('Nada novo para lançar.', true);
+    const b = ev.target; b.disabled = true; b.textContent = 'Lançando…';
+    const { error } = await sb.from('lancamentos').insert(rows);
+    if (error) { b.disabled = false; b.textContent = 'Lançar selecionados'; return toast(msgErro(error), true); }
+    toast(`${rows.length} lançamento(s) criado(s) a partir do CWMKT. Eles aparecem nos Pendentes como "Sem situação".`);
+    box.innerHTML = '';
+    if (typeof carregarDia === 'function') carregarDia(dia);
+  });
 }
 
 // ---------------------------------------------------------------- MINHA CONTA
