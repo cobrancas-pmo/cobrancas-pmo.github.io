@@ -312,3 +312,49 @@ tr.linha-destaque td { background: color-mix(in srgb, var(--ok-soft) 75%, transp
 .cal-dia.hoje { font-weight: 700; text-decoration: underline; }
 .cal-dia.sel { background: var(--primary); color: var(--primary-ink); }
 .cal-rod { display: flex; justify-content: space-between; border-top: 1px solid var(--line); margin-top: .4rem; padding-top: .35rem; font-size: .85rem; }
+
+/* campanhas (SMS/e-mail pela Assertiva) */
+:root { --camp: #7a4fb5; --camp-soft: #f1eafa; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --camp: #b994e8; --camp-soft: #2a2138; } }
+:root[data-theme="dark"] { --camp: #b994e8; --camp-soft: #2a2138; }
+.tag.camp { background: var(--camp-soft); color: var(--camp); }
+.alterna { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); margin-bottom: .9rem; max-width: 100%; }
+.alterna a { font-weight: 600; font-size: .9rem; color: var(--ink-2); padding: .45rem .95rem; text-decoration: none; }
+.alterna a + a { border-left: 1px solid var(--line); }
+.alterna a.on { background: var(--primary); color: var(--primary-ink); }
+.passos { display: flex; gap: .4rem; flex-wrap: wrap; margin: 0 0 1rem; padding: 0; list-style: none; }
+.passos li { display: flex; align-items: center; gap: .45rem; font-size: .88rem; font-weight: 600; color: var(--muted); padding: .35rem .7rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); }
+.passos li .n { width: 1.35rem; height: 1.35rem; border-radius: 50%; display: grid; place-items: center; font-size: .75rem; background: var(--surface-2); color: var(--ink-2); }
+.passos li.on { color: var(--primary); border-color: var(--primary); }
+.passos li.on .n { background: var(--primary); color: var(--primary-ink); }
+.passos li.feito { color: var(--ok); }
+.passos li.feito .n { background: var(--ok-soft); color: var(--ok); }
+.arquivo { display: flex; gap: .8rem; align-items: center; border: 1px dashed var(--line); border-radius: var(--radius); padding: .8rem .9rem; background: var(--surface-2); flex-wrap: wrap; cursor: pointer; position: relative; }
+.arquivo:hover { border-color: var(--primary); }
+.arquivo:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.arquivo .ico { width: 2.2rem; height: 2.2rem; border-radius: 8px; background: var(--ok-soft); color: var(--ok); display: grid; place-items: center; font-weight: 800; font-size: .7rem; flex: none; }
+.arquivo .ico.vazio2 { background: var(--none-soft); color: var(--none); }
+.arquivo .txt { flex: 1; min-width: 12rem; display: flex; flex-direction: column; }
+.so-leitor { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.dica-link { color: var(--primary); font-size: .85rem; font-weight: 600; }
+.checks { list-style: none; padding: 0; margin: .4rem 0 0; display: grid; gap: .3rem; font-size: .9rem; }
+.checks li { display: flex; gap: .5rem; align-items: baseline; }
+.checks .m { font-weight: 800; width: 1rem; flex: none; text-align: center; }
+.checks .ok { color: var(--ok); } .checks .at { color: var(--warn); } .checks .fo { color: var(--none); }
+.instr { margin: .8rem 0 .4rem; padding-left: 1.2rem; display: grid; gap: .3rem; font-size: .92rem; }
+.cobs { display: flex; gap: .4rem .9rem; flex-wrap: wrap; font-size: .92rem; padding-top: .35rem; }
+.cobs label { display: flex; gap: .35rem; align-items: center; font-weight: 600; color: var(--ink); }
+.cobs input, td.cx input, th.cx input { width: auto; }
+td.cx, th.cx { width: 2rem; }
+tr.fora td { color: var(--muted); }
+.tab-alta { max-height: 60vh; overflow: auto; }
+.funil-camp { display: grid; gap: .45rem; }
+.fl { display: grid; grid-template-columns: minmax(9rem, 15rem) 1fr 4.5rem; gap: .6rem; align-items: center; font-size: .88rem; }
+.fl .b { height: 1.25rem; background: var(--surface-2); border-radius: 6px; overflow: hidden; }
+.fl .b span { display: block; height: 100%; background: var(--primary); border-radius: 6px; }
+.fl .b span.c2 { background: var(--s3); } .fl .b span.c3 { background: var(--c-pago); }
+.fl .v { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+.fl .rot small { display: block; color: var(--muted); font-weight: 400; font-size: .78rem; }
+.barra-p { display: inline-block; height: .55rem; border-radius: 4px; background: var(--primary); vertical-align: middle; margin-right: .4rem; }
+tr.casos > td { background: var(--surface-2); }
+@media (max-width: 640px) { .fl { grid-template-columns: 1fr 3.5rem; } .fl .b { grid-column: 1 / -1; grid-row: 2; } }

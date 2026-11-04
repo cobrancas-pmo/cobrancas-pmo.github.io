@@ -302,9 +302,10 @@ function parseHash() {
 function rotear() {
   if (!S.perfil || !S.perfil.ativo || S.recuperando) return;
   const { rota, params } = parseHash();
-  $$('#menu a').forEach(a => a.classList.toggle('ativo', a.dataset.rota === rota));
+  const rotaMenu = rota.startsWith('campanha') ? 'relatorios' : rota;
+  $$('#menu a').forEach(a => a.classList.toggle('ativo', a.dataset.rota === rotaMenu));
   destruirGraficos();
-  const telas = { lancar: telaLancar, pendentes: telaPendentes, buscar: telaBuscar, relatorios: telaRelatorios, cancelamentos: telaCancelamentos, admin: telaAdmin, conta: telaConta };
+  const telas = { lancar: telaLancar, pendentes: telaPendentes, buscar: telaBuscar, relatorios: telaRelatorios, 'campanha-nova': telaCampanhaNova, 'campanha-dividir': telaCampanhaDividir, cancelamentos: telaCancelamentos, admin: telaAdmin, conta: telaConta };
   (telas[rota] || telaLancar)(params);
   app().focus({ preventScroll: true });
 }
@@ -594,7 +595,7 @@ async function carregarDia(dia) {
   tb.innerHTML = rows.map((r, i) => {
     const acoes = [r.whatsapp && `WhatsApp: ${r.whatsapp}`, r.sms && `SMS: ${r.sms}`, r.ligacao && `Ligação: ${r.ligacao}`, r.agendamento && `Agend.: ${fmtData(r.agendamento)}`].filter(Boolean);
     return `<tr><td>${i + 1}</td><td><strong>${esc(r.id_parcelamento)}</strong>${r.origem ? `<div class="dica">Origem ${esc(r.origem)}</div>` : ''}</td>
-      <td>${esc(r.setor || '')}</td><td class="dica">${acoes.map(esc).join('<br>')}${tagAgend(r)}</td>
+      <td>${esc(r.setor || '')}</td><td class="dica">${r.campanha_id ? '<span class="tag camp">Campanha</span><br>' : ''}${acoes.map(esc).join('<br>')}${tagAgend(r)}</td>
       <td>${r.boleto_emitido ? fmtData(r.boleto_emitido) + (r.parcelas ? `<div class="dica">${r.parcelas} parc.</div>` : '') : ''}${r.valor_boleto != null ? `<div class="dica">${BRL.format(r.valor_boleto)}</div>` : ''}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
       <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${r.novo_parcelamento || r.valor_acordo != null ? `<div class="dica">Novo parc. ${esc(r.novo_parcelamento || '')}${r.valor_acordo != null ? ` · ${BRL.format(r.valor_acordo)}` : ''}</div>` : ''}${tagCanc(r)}${tagEfet(r)}</td>
       <td class="num">${r.valor_pago != null ? BRL.format(r.valor_pago) : ''}${r.data_pagamento ? `<div class="dica">pago em ${fmtData(r.data_pagamento)}</div>` : ''}</td>
@@ -625,7 +626,7 @@ async function telaPendentes(params = {}) {
         <optgroup label="Atendente">${S.perfis.filter(p => p.id !== S.user.id).map(p => `<option value="${p.id}" ${p.id === de ? 'selected' : ''}>${esc(p.nome)}${p.ativo ? '' : ' (inativo)'}</option>`).join('')}</optgroup></select></label>` : ''}
       <label class="campo">Mostrar<select id="filtroPend">
         <option value="todos">Todos os pendentes</option><option value="conf">Só os que precisam de conferência</option><option value="venc">Só boletos vencidos (conferir pagamento)</option><option value="agend">Só agendamentos vencidos (conferir comparecimento)</option><option value="efet">Só encaminhados para parcelamento (conferir efetivação)</option>
-        <option value="and">Só "Em andamento"</option><option value="sem">Só "Sem situação"</option></select></label>
+        <option value="and">Só "Em andamento"</option><option value="sem">Só "Sem situação"</option><option value="camp">Só de campanhas (SMS/e-mail)</option></select></label>
       <label class="campo">Tipo de cobrança<select id="tipoPend">${optTiposCob(params.tc || '')}</select></label>
     </div>
     <div class="card"><div class="tabela-wrap"><table><thead><tr><th>Data do contato</th><th class="num">Dias</th><th>Id parc.</th><th>Setor</th><th>Situação</th><th>Agendamento</th><th>Boleto</th>${daEquipe ? '<th>Atendente</th>' : ''}<th>Observações</th><th></th></tr></thead>
@@ -647,7 +648,7 @@ async function telaPendentes(params = {}) {
   const pri = r => (conferir(r) ? 0 : (statusVenc(r) === 'compensacao' || statusAgend(r) === 'hoje') ? 1 : 2);
   const dataRef = r => [statusVenc(r) === 'conferir' ? r.boleto_vencimento : null, statusAgend(r) === 'conferir' ? r.agendamento : null, statusEfet(r) === 'conferir' ? r.situacao_desde : null].filter(Boolean).sort()[0] || '9999';
   const todas = (data || []).slice().sort((a, b) => pri(a) - pri(b) || (pri(a) === 0 ? dataRef(a).localeCompare(dataRef(b)) : 0));
-  const testes = { todos: () => true, conf: conferir, venc: r => statusVenc(r) === 'conferir', agend: r => statusAgend(r) === 'conferir', efet: r => statusEfet(r) === 'conferir', and: r => !!r.situacao, sem: r => !r.situacao };
+  const testes = { todos: () => true, conf: conferir, venc: r => statusVenc(r) === 'conferir', agend: r => statusAgend(r) === 'conferir', efet: r => statusEfet(r) === 'conferir', and: r => !!r.situacao, sem: r => !r.situacao, camp: r => !!r.campanha_id };
   // quantidades nas próprias opções do filtro (substituem os quadros da equipe)
   const tSel = $('#tipoPend');
   const contar = () => [...fSel.options].forEach(o => { const n = todas.filter(r => testaTipoCob(r, tSel.value) && testes[o.value](r)).length; o.textContent = o.textContent.replace(/ \(\d+\)$/, '') + ` (${n})`; });
@@ -658,7 +659,7 @@ async function telaPendentes(params = {}) {
     const rows = todas.filter(r => testaTipoCob(r, tSel.value) && (testes[filtro] || testes.todos)(r));
     if (!rows.length) { tb.innerHTML = `<tr><td colspan="${colsN}" class="vazio">${vazios[filtro] || 'Nenhuma pendência. 👍'}</td></tr>`; return; }
     tb.innerHTML = rows.map(r => `<tr class="${conferir(r) ? 'linha-alerta' : ''}"><td>${fmtData(r.data_contato)}</td><td class="num">${diasDesde(r.data_contato)}</td>
-      <td><strong>${esc(r.id_parcelamento)}</strong></td><td>${esc(r.setor || '')}</td>
+      <td><strong>${esc(r.id_parcelamento)}</strong>${r.campanha_id ? '<div><span class="tag camp">Campanha</span></div>' : ''}</td><td>${esc(r.setor || '')}</td>
       <td>${tag(catDe(r.situacao))}<div class="dica">${esc(r.situacao || '')}</div>${tagEfet(r)}</td><td>${fmtData(r.agendamento)}${tagAgend(r)}</td>
       <td>${fmtData(r.boleto_emitido)}${r.boleto_vencimento ? `<div class="dica">venc. ${fmtData(r.boleto_vencimento)}</div>` : ''}${tagVenc(r)}</td>
       ${daEquipe ? `<td>${esc(nomes[r.funcionario_id] || (r.funcionario_id === S.user.id ? S.perfil.nome : '—'))}</td>` : ''}
@@ -822,10 +823,12 @@ function rotuloPeriodo(ini, fim) {
 }
 
 function telaRelatorios(params) {
+  if (params.ver === 'campanhas') return telaCampanhas(params);
   const [ya, ma] = hoje().split('-').map(Number);
   app().innerHTML = `
   <div class="cab nao-imprimir"><div><h1>Relatórios</h1><p class="sub">Escolha o período${ehSup() ? ' e o funcionário' : ''}. Tudo é calculado na hora, a partir dos lançamentos.</p></div>
     <div class="acoes"><button class="btn" id="btnImprimir">Imprimir / salvar PDF</button><button class="btn" id="btnCsv">Baixar resumo (CSV)</button></div></div>
+  ${alternaRel('atendimentos')}
   <form class="card nao-imprimir" id="fRel"><div class="linha">
     <div class="campo"><span id="rotPer">Período</span><div class="periodo" role="group" aria-labelledby="rotPer">
       <span class="per-rot">De</span><button type="button" class="per-dt" data-q="ini" aria-haspopup="dialog">${ICO_CAL}<span></span></button>
@@ -1230,6 +1233,345 @@ function baixarCsv() {
   const csv = '﻿' + L.map(r => r.map(c => { c = String(c ?? ''); return /[;"\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c; }).join(';')).join('\r\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   a.download = `relatorio_cobrancas_${p.ini}_a_${p.fim}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------------------------------------------------------------- CAMPANHAS (SMS/e-mail pela Assertiva)
+// Os arquivos do SMAR são lidos aqui no navegador (js/campanhas.js). Ao banco vão só Id, setor, origem,
+// tipo de cobrança e o telefone embaralhado.
+let _xlsx = null;
+function carregarXLSX() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (_xlsx) return _xlsx;
+  _xlsx = new Promise((ok, falha) => {
+    const s = document.createElement('script'); s.src = 'vendor/xlsx-0.18.5.full.min.js?v=' + VERSAO_ARQ;
+    s.onload = () => ok(window.XLSX); s.onerror = () => { _xlsx = null; falha(new Error('Não foi possível carregar o leitor de planilhas. Recarregue a página.')); };
+    document.head.appendChild(s);
+  });
+  return _xlsx;
+}
+const VERSAO_ARQ = (document.querySelector('script[src*="js/app.js"]')?.src.match(/v=(\d+)/) || [])[1] || '1';
+function baixarPlanilha(wb, nome) {
+  const buf = window.XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+  a.download = nome; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+const lerComoBuffer = file => new Promise((ok, falha) => { const r = new FileReader(); r.onload = () => ok(new Uint8Array(r.result)); r.onerror = () => falha(r.error); r.readAsArrayBuffer(file); });
+const alternaRel = ver => `<div class="alterna nao-imprimir" role="tablist" aria-label="Tipo de relatório">
+  <a href="#/relatorios" role="tab" aria-selected="${ver !== 'campanhas'}" class="${ver !== 'campanhas' ? 'on' : ''}">Atendimentos</a>
+  <a href="#/relatorios?ver=campanhas" role="tab" aria-selected="${ver === 'campanhas'}" class="${ver === 'campanhas' ? 'on' : ''}">Campanhas</a></div>`;
+const primeiroNome = n => String(n || '').trim().split(/\s+/)[0] || 'Cobrador';
+const semAcento = s => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+// ---------- Relatórios → Campanhas ----------
+async function telaCampanhas(params) {
+  const [ya, ma] = hoje().split('-').map(Number);
+  let ini = `${ya}-${pad(ma)}-01`, fim = `${ya}-${pad(ma)}-${pad(ultimoDia(ya, ma))}`;
+  try { const a = localStorage.getItem('rel_ini'), b = localStorage.getItem('rel_fim'); if (/^\d{4}-\d\d-\d\d$/.test(a) && /^\d{4}-\d\d-\d\d$/.test(b) && a <= b) { ini = a; fim = b; } } catch (_) {}
+  app().innerHTML = `
+  <div class="cab"><div><h1>Relatórios</h1><p class="sub">Campanhas de SMS e e-mail pela Assertiva: quantos receberam, quantos responderam pelo WhatsApp e quantos pagaram.</p></div>
+    <div class="acoes">${ehSup() ? '<a class="btn" href="#/campanha-dividir">Dividir lista do SMAR</a>' : ''}<a class="btn prim" href="#/campanha-nova">+ Nova campanha</a></div></div>
+  ${alternaRel('campanhas')}
+  <form class="card" id="fCamp"><div class="linha">
+    <label class="campo">Enviadas de<input type="date" name="ini" value="${ini}" required></label>
+    <label class="campo">a<input type="date" name="fim" value="${fim}" required></label>
+    ${ehSup() ? `<label class="campo">Funcionário<select name="func"><option value="">Toda a equipe</option>${S.perfis.map(p => `<option value="${p.id}">${esc(p.nome)}${p.ativo ? '' : ' (inativo)'}</option>`).join('')}</select></label>` : ''}
+    <button class="btn prim" type="submit">Gerar</button></div></form>
+  <div id="relCamp"><p class="carregando">Calculando…</p></div>`;
+  const f = $('#fCamp');
+  const gerar = async () => {
+    if (!f.ini.value || !f.fim.value || f.ini.value > f.fim.value) return toast('Período inválido.', true);
+    try { localStorage.setItem('rel_ini', f.ini.value); localStorage.setItem('rel_fim', f.fim.value); } catch (_) {}
+    const box = $('#relCamp'); box.innerHTML = '<p class="carregando">Calculando…</p>';
+    const { data: R, error } = await sb.rpc('relatorio_campanhas', { p_inicio: f.ini.value, p_fim: f.fim.value, p_func: f.func ? f.func.value || null : null });
+    if (error) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(error))}</div>`; return; }
+    desenharCampanhas(box, R);
+  };
+  f.addEventListener('submit', e => { e.preventDefault(); gerar(); });
+  gerar();
+}
+function desenharCampanhas(box, R) {
+  const T = R.totais, ativo = R.retorno_ativo;
+  const k = (rot, val, det = '', cls = '') => `<div class="kpi ${cls}"><div class="rot">${rot}</div><div class="val">${val}</div>${det ? `<div class="det">${det}</div>` : ''}</div>`;
+  const ret = v => (ativo ? NUM.format(v) : '—');
+  if (!T.campanhas) {
+    box.innerHTML = `<div class="card"><p class="vazio">Nenhuma campanha enviada neste período.</p><p class="dica" style="text-align:center">Para começar, clique em <b>+ Nova campanha</b>${ehSup() ? ' (ou, antes, em <b>Dividir lista do SMAR</b>)' : ''}.</p></div>`;
+    return;
+  }
+  const barra = (rot, dica, v, cls = '') => `<div class="fl"><div class="rot">${rot}${dica ? `<small>${dica}</small>` : ''}</div><div class="b"><span class="${cls}" style="width:${Math.max(0, Math.min(100, div0(v, T.parcelamentos) * 100))}%"></span></div><div class="v">${NUM.format(v)}</div></div>`;
+  box.innerHTML = `
+  <div class="kpis">
+    ${k('Parcelamentos na campanha', NUM.format(T.parcelamentos), `${NUM.format(T.campanhas)} campanha(s) · ${NUM.format(T.contribuintes)} contribuinte(s)`, 'destaque')}
+    ${k('Responderam antes do WhatsApp', ret(T.antes), ativo ? `${PCT.format(div0(T.antes, T.parcelamentos))} · só com SMS/e-mail` : 'aguardando a ligação com o CWMKT')}
+    ${k('Responderam depois do WhatsApp', ret(T.depois), ativo ? `${PCT.format(div0(T.depois, T.parcelamentos))} · após a mensagem do cobrador` : 'aguardando a ligação com o CWMKT')}
+    ${k('Pagaram', NUM.format(T.pagos), `${PCT.format(div0(T.pagos, T.parcelamentos))} dos parcelamentos`)}
+    ${k('Valor arrecadado', BRL.format(T.valor), 'lançamentos da campanha marcados como pagos')}
+  </div>
+  <div class="grade-2">
+    <div class="card"><h2>Funil das campanhas</h2><div class="funil-camp">
+      ${barra('Receberam SMS/e-mail', `SMS: ${NUM.format(T.sms)} · e-mail: ${NUM.format(T.email)}`, T.parcelamentos)}
+      ${ativo ? barra('Responderam só com SMS/e-mail', 'antes de o cobrador mandar WhatsApp', T.antes, 'c2') + barra('Responderam no total', 'antes + depois do WhatsApp', T.antes + T.depois, 'c2') : ''}
+      ${barra('Pagaram', '', T.pagos, 'c3')}
+    </div>${ativo ? '<p class="dica">Quem responde <b>antes</b> do WhatsApp mostra o que o SMS e o e-mail trazem sozinhos.</p>' : '<p class="dica">As etapas de resposta pelo WhatsApp aparecem quando a ligação com o CWMKT for ativada. Até lá, marque o WhatsApp no lançamento como de costume.</p>'}</div>
+    <div class="card"><h2>Por cobrador</h2><div class="tabela-wrap"><table>
+      <thead><tr><th>Cobrador</th><th class="num">Campanhas</th><th class="num">Parcel.</th><th class="num">Antes WA</th><th class="num">Depois WA</th><th class="num">Pagos</th><th class="num">Valor</th></tr></thead>
+      <tbody>${R.por_cobrador.map(c => `<tr><td>${esc(c.cobrador)}</td><td class="num">${NUM.format(c.campanhas)}</td><td class="num">${NUM.format(c.parcelamentos)}</td><td class="num">${ret(c.antes)}</td><td class="num">${ret(c.depois)}</td><td class="num">${NUM.format(c.pagos)}</td><td class="num">${BRL.format(c.valor)}</td></tr>`).join('')}
+      <tr class="total"><td>Total</td><td class="num">${NUM.format(T.campanhas)}</td><td class="num">${NUM.format(T.parcelamentos)}</td><td class="num">${ret(T.antes)}</td><td class="num">${ret(T.depois)}</td><td class="num">${NUM.format(T.pagos)}</td><td class="num">${BRL.format(T.valor)}</td></tr></tbody></table></div></div>
+  </div>
+  <div class="card"><h2>Campanhas do período</h2><div class="tabela-wrap"><table>
+    <thead><tr><th>Envio</th><th>Campanha</th><th>Cobrador</th><th>Canais</th><th class="num">Parcel.</th><th class="num">Antes WA</th><th class="num">Depois WA</th><th class="num">Pagos</th><th class="num">Valor</th><th></th></tr></thead>
+    <tbody>${R.campanhas.map(c => `<tr><td>${fmtData(c.data_envio)}</td><td><strong>${esc(c.codigo)}</strong></td><td>${esc(c.cobrador)}</td><td>${esc((c.canais || []).join(' · '))}</td>
+      <td class="num">${NUM.format(c.parcelamentos)}</td><td class="num">${ret(c.antes)}</td><td class="num">${ret(c.depois)}</td><td class="num">${NUM.format(c.pagos)}</td><td class="num">${BRL.format(c.valor)}</td>
+      <td><button class="btn peq" type="button" data-casos="${c.id}">Ver casos</button></td></tr><tr class="casos" id="casos-${c.id}" hidden><td colspan="10"></td></tr>`).join('')}</tbody></table></div>
+    <p class="dica">${ehSup() ? 'Supervisão e administração veem as campanhas de todos.' : 'Você vê só as suas campanhas.'} O período considera a data de envio; pagamentos contam pelo lançamento ligado à campanha.</p></div>`;
+  $$('[data-casos]', box).forEach(b => b.addEventListener('click', async () => {
+    const tr = $('#casos-' + b.dataset.casos); if (!tr.hidden) { tr.hidden = true; b.textContent = 'Ver casos'; return; }
+    tr.hidden = false; b.textContent = 'Fechar'; const td = tr.firstElementChild; td.innerHTML = '<span class="dica">Carregando…</span>';
+    const { data, error } = await sb.from('campanha_itens').select('id_parcelamento,tem_email,retorno_em,wa_enviado_em,lancamento_id,lancamentos(id,data_contato,situacao,valor_pago,funcionario_id)').eq('campanha_id', b.dataset.casos).order('id');
+    if (error) { td.innerHTML = `<span class="aviso erro">${esc(msgErro(error))}</span>`; return; }
+    td.innerHTML = `<div class="tabela-wrap"><table><thead><tr><th>Id parc.</th><th>E-mail</th><th>Respondeu no WhatsApp</th><th>Situação</th><th class="num">Pago</th><th></th></tr></thead><tbody>${(data || []).map(i => {
+      const l = i.lancamentos; const pode = l && (l.funcionario_id === S.user.id || ehAdmin());
+      return `<tr><td><strong>${esc(i.id_parcelamento)}</strong></td><td>${i.tem_email ? 'sim' : '—'}</td>
+        <td>${i.retorno_em ? new Date(i.retorno_em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) + (i.wa_enviado_em && i.retorno_em >= i.wa_enviado_em ? ' (depois do WhatsApp)' : ' (antes do WhatsApp)') : '—'}</td>
+        <td>${l ? tag(catDe(l.situacao)) + `<div class="dica">${esc(l.situacao || '')}</div>` : '<span class="dica">lançamento excluído</span>'}</td>
+        <td class="num">${l && l.valor_pago != null && catDe(l.situacao) === 'Pago' ? BRL.format(l.valor_pago) : ''}</td>
+        <td>${l ? (pode ? `<a class="btn peq" href="#/lancar?data=${l.data_contato}&editar=${l.id}">Abrir</a>` : `<a class="btn peq" href="#/buscar?q=${encodeURIComponent(i.id_parcelamento)}">Ver</a>`) : ''}</td></tr>`;
+    }).join('')}</tbody></table></div>`;
+  }));
+}
+
+// ---------- Nova campanha ----------
+async function telaCampanhaNova() {
+  const C = window.Campanhas;
+  const E = { arq: null, extra: null, nomeArq: '', nomeExtra: '', dados: null, grupos: [], ja: new Map(), outros: new Set(), resultado: null };
+  app().innerHTML = `
+  <div class="cab"><div><h1>Nova campanha</h1><p class="sub">Escolha os contribuintes de hoje e baixe a planilha no modelo da Assertiva. Ao registrar, os lançamentos entram no seu Lançar de hoje.</p></div>
+    <div class="acoes"><a class="btn" href="#/relatorios?ver=campanhas">Voltar às campanhas</a></div></div>
+  <ol class="passos" id="passos"><li data-p="1" class="on"><span class="n">1</span>Arquivo</li><li data-p="2"><span class="n">2</span>Contribuintes de hoje</li><li data-p="3"><span class="n">3</span>Planilha da Assertiva</li></ol>
+
+  <div class="card" data-passo="1">
+    <h2>1. Arquivo da sua lista</h2>
+    <label class="arquivo" for="arqPrinc"><span class="ico" id="icoPrinc">XLS</span><span class="txt"><b id="nomePrinc">Escolher o arquivo do SMAR</b><span class="dica" id="detPrinc">Sua lista (.xls ou .xlsx), com as colunas CPF/CNPJ e E-mail completadas.</span></span><span class="btn peq">Escolher arquivo</span>
+      <input type="file" id="arqPrinc" accept=".xls,.xlsx" class="so-leitor"></label>
+    <details id="detExtra" style="margin-top:.7rem"><summary class="dica-link">Os dados que faltam estão em outro relatório do SMAR? Envie um segundo arquivo</summary>
+      <label class="arquivo" for="arqExtra" style="margin-top:.5rem"><span class="ico vazio2" id="icoExtra">+</span><span class="txt"><b id="nomeExtra">Segundo arquivo (opcional)</b><span class="dica" id="detExtraTxt">Relatório com Crc, CPF/CNPJ e e-mail. O sistema junta os dois pelo Crc.</span></span><span class="btn peq">Escolher arquivo</span>
+        <input type="file" id="arqExtra" accept=".xls,.xlsx" class="so-leitor"></label></details>
+    <div id="conf"></div>
+    <div class="aviso info">Nome, CPF, telefone e e-mail aparecem só nesta tela, no seu navegador. O sistema grava apenas o Id do parcelamento, a campanha, quem enviou e o telefone embaralhado.</div>
+    <div class="acoes" style="justify-content:flex-end"><button class="btn prim" type="button" id="ir2" disabled>Continuar</button></div>
+  </div>
+
+  <div class="card" data-passo="2" hidden>
+    <h2>2. Contribuintes de hoje</h2>
+    <div class="linha" style="margin-bottom:.8rem">
+      <label class="campo">Quantos contribuintes hoje<input id="fQtd" type="number" value="15" min="1" max="200" style="width:7rem"></label>
+      <label class="campo">Ordem<select id="fOrdem"><option value="maior">Maior valor primeiro</option><option value="menor">Menor valor primeiro</option><option value="atraso">Mais dias de atraso</option></select></label>
+      <div class="campo"><span>Enviar por</span><div class="cobs"><label><input id="cSms" type="checkbox" checked> SMS</label><label><input id="cEmail" type="checkbox" checked> E-mail</label></div></div>
+      <label class="check-linha"><input id="cJa" type="checkbox"> Incluir quem já recebeu campanha</label>
+    </div>
+    <div class="tabela-wrap tab-alta"><table>
+      <thead><tr><th class="cx"><input type="checkbox" id="cTodos" aria-label="Marcar todos os visíveis"></th><th>Id parc.</th><th>Nome</th><th>Setor</th><th class="num">Valor aberto</th><th class="num">Dias de atraso</th><th>Celular</th><th>E-mail</th></tr></thead>
+      <tbody id="tbHoje"></tbody></table></div>
+    <p class="dica" id="resumoHoje"></p>
+    <div class="acoes" style="justify-content:space-between"><button class="btn" type="button" data-irp="1">Voltar</button><button class="btn prim" type="button" id="ir3">Continuar</button></div>
+  </div>
+
+  <div class="card" data-passo="3" hidden>
+    <h2>3. Planilha da Assertiva</h2>
+    <div id="resumo3"></div>
+    <div class="aviso atencao" id="aviso3"></div>
+    <div class="acoes" style="justify-content:space-between" id="acoes3"><button class="btn" type="button" data-irp="2">Voltar</button><button class="btn prim" type="button" id="btnReg">Registrar campanha e baixar planilha</button></div>
+    <div id="feito3" hidden></div>
+  </div>`;
+
+  const passo = n => {
+    $$('[data-passo]').forEach(c => { c.hidden = c.dataset.passo !== String(n); });
+    $$('#passos li').forEach(li => { const p = +li.dataset.p; li.classList.toggle('on', p === n); li.classList.toggle('feito', p < n); li.querySelector('.n').textContent = p < n ? '✓' : p; });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  $$('[data-irp]').forEach(b => b.addEventListener('click', () => passo(+b.dataset.irp)));
+  const canais = () => [$('#cSms').checked && 'SMS', $('#cEmail').checked && 'E-mail'].filter(Boolean);
+
+  async function processar() {
+    const box = $('#conf'); $('#ir2').disabled = true;
+    if (!E.arq) return;
+    box.innerHTML = '<p class="carregando">Conferindo o arquivo…</p>';
+    let r;
+    try { r = C.montar(E.arq, E.extra); } catch (e) { box.innerHTML = `<div class="aviso erro">${esc(e.message)}</div>`; return; }
+    E.dados = r; E.grupos = C.agrupar(r.itens);
+    const ids = r.itens.map(i => i.id);
+    const [{ data: ja }, { data: outros }] = await Promise.all([sb.rpc('ja_em_campanha', { p_ids: ids }), sb.rpc('lista_de_outros', { p_ids: ids })]);
+    E.ja = new Map((ja || []).map(x => [x.id_parcelamento, x]));
+    E.outros = new Set(outros || []);
+    const cf = r.conf;
+    const gOutros = E.grupos.filter(g => g.itens.some(i => E.outros.has(i.id))).length;
+    const gJa = E.grupos.filter(g => g.itens.some(i => E.ja.has(i.id))).length;
+    const aptos = E.grupos.filter(g => C.apto(g, ['SMS', 'E-mail']) && !g.itens.some(i => E.outros.has(i.id))).length;
+    const li = (m, cls, t) => `<li><span class="m ${cls}">${m}</span><span>${t}</span></li>`;
+    const tipos = [...new Set(r.itens.map(i => i.tipo).filter(Boolean))];
+    box.innerHTML = `<h3 style="margin-top:1rem">Conferência do arquivo</h3><ul class="checks">
+      ${li('✓', 'ok', `<b>${NUM.format(cf.validos)}</b> parcelamentos lidos de <b>${NUM.format(E.grupos.length)}</b> contribuintes · <b>${NUM.format(aptos)}</b> contribuintes prontos para a campanha (com CPF/CNPJ e celular ou e-mail)`)}
+      ${li('✓', 'ok', `<b>${NUM.format(cf.validos - cf.semCel)}</b> com celular · <b>${NUM.format(cf.validos - cf.semEmail)}</b> com e-mail${tipos.length ? ` · Tipo de cobrança: ${tipos.map(esc).join(' e ')} (pelas parcelas vencidas)` : ''}`)}
+      ${!r.temDoc ? li('!', 'at', 'O arquivo não tem a coluna <b>CPF/CNPJ</b>. A Assertiva exige o documento: complete a coluna ou envie o segundo arquivo.') : (cf.semDoc + cf.docInvalido) ? li('!', 'at', `<b>${NUM.format(cf.semDoc)}</b> sem CPF/CNPJ${cf.docInvalido ? ` e <b>${NUM.format(cf.docInvalido)}</b> com CPF/CNPJ inválido` : ''}: não vão para a Assertiva.`) : ''}
+      ${!r.temEmail ? li('–', 'fo', 'O arquivo não tem a coluna <b>E-mail</b>: a campanha sai só por SMS.') : ''}
+      ${cf.semContato ? li('!', 'at', `<b>${NUM.format(cf.semContato)}</b> parcelamentos sem celular nem e-mail ficam de fora.`) : ''}
+      ${gOutros ? li('!', 'at', `<b>${NUM.format(gOutros)}</b> contribuintes estão na lista de outro cobrador e ficam de fora.`) : ''}
+      ${gJa ? li('–', 'fo', `<b>${NUM.format(gJa)}</b> contribuintes já receberam campanha e não entram de novo (dá para incluir no passo 2).`) : ''}
+      ${cf.rodape || cf.repetidos || cf.revogados ? li('–', 'fo', `Retirados automaticamente: ${[cf.rodape && `${cf.rodape} linha(s) sem Id (título/rodapé)`, cf.repetidos && `${cf.repetidos} parcelamento(s) repetido(s)`, cf.revogados && `${cf.revogados} "Revogado"`].filter(Boolean).join(', ')}`) : ''}
+      ${cf.completadosPeloExtra ? li('✓', 'ok', `<b>${NUM.format(cf.completadosPeloExtra)}</b> CPF/CNPJ completados pelo segundo arquivo.`) : ''}
+    </ul>`;
+    $('#ir2').disabled = !aptos;
+    if (!aptos) box.insertAdjacentHTML('beforeend', '<div class="aviso erro">Nenhum contribuinte pode ir para a campanha: falta CPF/CNPJ ou contato.</div>');
+  }
+  const escolher = async (inp, qual) => {
+    const file = inp.files[0]; if (!file) return;
+    try {
+      const X = await carregarXLSX();
+      const a = C.lerArquivo(await lerComoBuffer(file), X);
+      if (qual === 'princ') { E.arq = a; E.nomeArq = file.name; $('#nomePrinc').textContent = file.name; $('#icoPrinc').textContent = 'OK'; $('#icoPrinc').className = 'ico'; $('#detPrinc').textContent = `${NUM.format(a.linhas.length)} linhas · trocar arquivo`; }
+      else { E.extra = a; E.nomeExtra = file.name; $('#nomeExtra').textContent = file.name; $('#icoExtra').textContent = 'OK'; $('#icoExtra').className = 'ico'; $('#detExtraTxt').textContent = `${NUM.format(a.linhas.length)} linhas · juntado pelo Crc`; }
+      await processar();
+    } catch (e) { toast(e.message || String(e), true); }
+    inp.value = '';
+  };
+  $('#arqPrinc').addEventListener('change', e => escolher(e.target, 'princ'));
+  $('#arqExtra').addEventListener('change', e => escolher(e.target, 'extra'));
+
+  // passo 2
+  let lista = [];
+  const marcados = new Set();
+  function montarLista(reiniciar) {
+    const cn = canais();
+    const incluirJa = $('#cJa').checked;
+    lista = E.grupos.filter(g => C.apto(g, cn) && !g.itens.some(i => E.outros.has(i.id)) && (incluirJa || !g.itens.some(i => E.ja.has(i.id))))
+      .sort(C.ORDENS[$('#fOrdem').value]);
+    if (reiniciar) { marcados.clear(); const q = Math.max(1, Math.min(200, Number($('#fQtd').value) || 15)); lista.slice(0, q).forEach(g => marcados.add(g.chave)); }
+    else for (const k of [...marcados]) if (!lista.some(g => g.chave === k)) marcados.delete(k);
+    $('#tbHoje').innerHTML = lista.length ? lista.map(g => {
+      const jaRec = g.itens.map(i => E.ja.get(i.id)).filter(Boolean)[0];
+      return `<tr class="${marcados.has(g.chave) ? '' : 'fora'}"><td class="cx"><input type="checkbox" data-k="${esc(g.chave)}" ${marcados.has(g.chave) ? 'checked' : ''} aria-label="Incluir ${esc(g.itens[0].id)}"></td>
+      <td>${g.itens.map(i => `<strong>${esc(i.id)}</strong>`).join('<br>')}</td><td>${esc(g.nome)}${jaRec ? `<div class="dica">já recebeu em ${fmtData(jaRec.data_envio)}</div>` : ''}</td><td>${esc(g.itens[0].setor || g.itens[0].setorSmar || '')}</td>
+      <td class="num">${BRL.format(g.valor)}</td><td class="num">${g.diasAtraso ? NUM.format(g.diasAtraso) : ''}</td><td>${cn.includes('SMS') && g.cel ? esc(C.fmtTel(g.cel)) : '<span class="dica">—</span>'}</td><td>${cn.includes('E-mail') && g.email ? 'sim' : '<span class="dica">—</span>'}</td></tr>`;
+    }).join('') : '<tr><td colspan="8" class="vazio">Nenhum contribuinte disponível com esses canais.</td></tr>';
+    resumo();
+  }
+  function resumo() {
+    const sel = lista.filter(g => marcados.has(g.chave));
+    const parc = sel.reduce((a, g) => a + g.itens.length, 0);
+    $('#resumoHoje').textContent = `${NUM.format(sel.length)} contribuinte(s) marcado(s) (${NUM.format(parc)} parcelamento(s)), de ${NUM.format(lista.length)} disponíveis. Os demais ficam para os próximos dias.`;
+    $('#ir3').disabled = !sel.length || !canais().length;
+  }
+  $('#ir2').addEventListener('click', () => { montarLista(true); passo(2); });
+  $('#fQtd').addEventListener('change', () => montarLista(true));
+  $('#fOrdem').addEventListener('change', () => montarLista(true));
+  $('#cJa').addEventListener('change', () => montarLista(false));
+  ['#cSms', '#cEmail'].forEach(s => $(s).addEventListener('change', () => { if (!canais().length) { toast('Escolha pelo menos um canal (SMS ou e-mail).', true); } montarLista(false); }));
+  $('#tbHoje').addEventListener('change', e => { const k = e.target.dataset.k; if (!k) return; if (e.target.checked) marcados.add(k); else marcados.delete(k); e.target.closest('tr').classList.toggle('fora', !e.target.checked); resumo(); });
+  $('#cTodos').addEventListener('change', e => { lista.forEach(g => (e.target.checked ? marcados.add(g.chave) : marcados.delete(g.chave))); montarLista(false); });
+
+  // passo 3
+  const selecionados = () => lista.filter(g => marcados.has(g.chave));
+  $('#ir3').addEventListener('click', () => {
+    const sel = selecionados(), cn = canais();
+    const parc = sel.reduce((a, g) => a + g.itens.length, 0);
+    const nSms = cn.includes('SMS') ? sel.filter(g => g.cel).length : 0, nMail = cn.includes('E-mail') ? sel.filter(g => g.email).length : 0;
+    $('#resumo3').innerHTML = `<ul class="checks"><li><span class="m ok">✓</span><span><b>${NUM.format(sel.length)}</b> contribuinte(s), <b>${NUM.format(parc)}</b> parcelamento(s)</span></li>
+      <li><span class="m ok">✓</span><span>${cn.includes('SMS') ? `SMS para <b>${NUM.format(nSms)}</b>` : ''}${cn.length === 2 ? ' · ' : ''}${cn.includes('E-mail') ? `e-mail para <b>${NUM.format(nMail)}</b>` : ''}</span></li>
+      <li><span class="m fo">–</span><span>A coluna "valor" leva o saldo em aberto do parcelamento (a Assertiva exige). Se a mensagem mostra ou não o valor, depende do modelo de mensagem configurado na Assertiva.</span></li></ul>
+      <ol class="instr"><li>Clique em <b>Registrar campanha e baixar planilha</b>.</li><li>Na Assertiva, importe a planilha na carteira da campanha (Gestão de Cobrança → importar dívidas).</li><li>Depois de 1 a 2 horas, mande o WhatsApp pelo CWMKT e marque no lançamento, como de costume.</li></ol>`;
+    $('#aviso3').innerHTML = `Ao registrar, o sistema cria os lançamentos de hoje no seu Lançar (SMS marcado como "Enviado" quando o SMS for usado). Quem já tem lançamento em aberto não ganha outro: a campanha é anotada no lançamento existente.`;
+    passo(3);
+  });
+  $('#btnReg').addEventListener('click', async () => {
+    const b = $('#btnReg'); const sel = selecionados(), cn = canais();
+    if (!sel.length || !cn.length) return;
+    b.disabled = true; b.textContent = 'Registrando…';
+    try {
+      const itens = [];
+      for (const g of sel) {
+        const h = await C.hashTelefone(g.cel);   // serve para reconhecer o retorno pelo WhatsApp
+        for (const it of g.itens) itens.push({ id_parcelamento: it.id, telefone_hash: h, tem_email: cn.includes('E-mail') && !!g.email, setor: it.setor, origem: it.origem, tipo_cobranca: it.tipo });
+      }
+      const { data, error } = await sb.rpc('registrar_campanha', { p_canais: cn, p_arquivo: E.nomeArq.slice(0, 150), p_itens: itens });
+      if (error) throw error;
+      const wb = C.planilhaAssertiva(sel, cn, data.codigo, window.XLSX);
+      const nome = `Assertiva_${data.codigo}.xlsx`;
+      baixarPlanilha(wb, nome);
+      E.resultado = { wb, nome };
+      $('#acoes3').hidden = true; $('#aviso3').hidden = true;
+      const fe = $('#feito3'); fe.hidden = false;
+      fe.innerHTML = `<div class="aviso ok">Campanha <b>${esc(data.codigo)}</b> registrada: ${NUM.format(data.novos)} lançamento(s) criado(s)${data.marcados ? ` e ${NUM.format(data.marcados)} lançamento(s) em aberto marcado(s)` : ''} no seu Lançar de hoje. A planilha foi baixada.</div>
+        <div class="acoes"><button class="btn" type="button" id="baixarDeNovo">Baixar a planilha de novo</button><a class="btn" href="#/lancar">Ir para o Lançar</a><a class="btn prim" href="#/relatorios?ver=campanhas">Ver campanhas</a></div>`;
+      $('#baixarDeNovo').addEventListener('click', () => baixarPlanilha(E.resultado.wb, E.resultado.nome));
+      $$('#passos li').forEach(li => { li.classList.remove('on'); li.classList.add('feito'); li.querySelector('.n').textContent = '✓'; });
+    } catch (e) {
+      toast(msgErro(e), true); b.disabled = false; b.textContent = 'Registrar campanha e baixar planilha';
+    }
+  });
+}
+
+// ---------- Dividir a lista do SMAR (supervisão) ----------
+async function telaCampanhaDividir() {
+  if (!ehSup()) { location.hash = '#/relatorios?ver=campanhas'; return; }
+  const C = window.Campanhas;
+  const E = { arq: null, nome: '', grupos: [], partes: null };
+  const ativos = S.perfis.filter(p => p.ativo);
+  app().innerHTML = `
+  <div class="cab"><div><h1>Dividir lista do SMAR</h1><p class="sub">Reparte o arquivo completo em listas de valor parecido, uma por cobrador. Contribuinte com vários parcelamentos fica inteiro com um cobrador só.</p></div>
+    <div class="acoes"><a class="btn" href="#/relatorios?ver=campanhas">Voltar às campanhas</a></div></div>
+  <div class="card">
+    <label class="arquivo" for="arqDiv"><span class="ico vazio2" id="icoDiv">XLS</span><span class="txt"><b id="nomeDiv">Escolher o arquivo do SMAR</b><span class="dica" id="detDiv">Arquivo "Parcelamento Vencido" (.xls ou .xlsx), do jeito que sai do sistema.</span></span><span class="btn peq">Escolher arquivo</span>
+      <input type="file" id="arqDiv" accept=".xls,.xlsx" class="so-leitor"></label>
+    <div class="linha" style="margin-top:1rem">
+      <div class="campo"><span>Dividir entre</span><div class="cobs" id="cobs">${ativos.map(p => `<label><input type="checkbox" value="${p.id}" checked> ${esc(p.nome)}</label>`).join('')}</div></div>
+      <label class="campo">Ordem dentro de cada lista<select id="fOrdDiv"><option value="maior">Maior valor primeiro</option><option value="menor">Menor valor primeiro</option></select></label>
+      <button class="btn prim" type="button" id="btnDiv" disabled>Dividir</button>
+    </div>
+  </div>
+  <div id="resDiv"></div>`;
+  $('#arqDiv').addEventListener('change', async e => {
+    const file = e.target.files[0]; if (!file) return;
+    try {
+      const X = await carregarXLSX();
+      E.arq = C.lerArquivo(await lerComoBuffer(file), X); E.nome = file.name;
+      const r = C.montar(E.arq);
+      E.grupos = C.agrupar(r.itens);
+      const total = E.grupos.reduce((a, g) => a + g.valor, 0);
+      $('#nomeDiv').textContent = file.name; $('#icoDiv').textContent = 'OK'; $('#icoDiv').className = 'ico';
+      $('#detDiv').textContent = `${NUM.format(r.itens.length)} parcelamentos · ${NUM.format(E.grupos.length)} contribuintes · ${BRL.format(total)} em aberto${r.conf.revogados ? ` · ${r.conf.revogados} "Revogado" retirado(s)` : ''}`;
+      $('#btnDiv').disabled = false; $('#resDiv').innerHTML = '';
+    } catch (err) { toast(err.message || String(err), true); }
+    e.target.value = '';
+  });
+  $('#btnDiv').addEventListener('click', () => {
+    const ids = $$('#cobs input:checked').map(i => i.value);
+    if (ids.length < 1) return toast('Marque pelo menos um cobrador.', true);
+    E.partes = C.dividir(E.grupos, ids.map(id => ({ id, nome: nomePerfil(id) })));
+    const total = E.partes.reduce((a, p) => a + p.valor, 0);
+    const dif = Math.max(...E.partes.map(p => p.valor)) - Math.min(...E.partes.map(p => p.valor));
+    $('#resDiv').innerHTML = `<div class="card"><h2>Resultado</h2><div class="tabela-wrap"><table>
+      <thead><tr><th>Cobrador</th><th class="num">Contribuintes</th><th class="num">Parcelamentos</th><th class="num">Valor em aberto</th><th>Participação</th><th class="num">Com celular</th><th></th></tr></thead>
+      <tbody>${E.partes.map((p, i) => `<tr><td>${esc(p.nome)}</td><td class="num">${NUM.format(p.grupos.length)}</td><td class="num">${NUM.format(p.parcelamentos)}</td><td class="num">${BRL.format(p.valor)}</td>
+        <td><span class="barra-p" style="width:${(div0(p.valor, total) * 8).toFixed(2)}rem"></span>${PCT.format(div0(p.valor, total))}</td><td class="num">${NUM.format(p.comCel)}</td>
+        <td><button class="btn peq" type="button" data-baixar="${i}">Baixar lista</button></td></tr>`).join('')}
+      <tr class="total"><td>Total</td><td class="num">${NUM.format(E.grupos.length)}</td><td class="num">${NUM.format(E.partes.reduce((a, p) => a + p.parcelamentos, 0))}</td><td class="num">${BRL.format(total)}</td><td>diferença máxima: ${BRL.format(dif)}</td><td class="num">${NUM.format(E.partes.reduce((a, p) => a + p.comCel, 0))}</td><td></td></tr></tbody></table></div>
+      <ul class="checks" style="margin-top:.8rem">
+        <li><span class="m ok">✓</span><span>Cada lista sai no mesmo formato do arquivo do SMAR, com as colunas CPF/CNPJ e E-mail para completar.</span></li>
+        <li><span class="m ok">✓</span><span>Ao salvar, o sistema guarda de quem é cada Id (sem dados pessoais). Na Nova campanha, cada cobrador só usa os da própria lista.</span></li>
+      </ul>
+      <div class="acoes" style="justify-content:flex-end"><button class="btn" type="button" id="baixarTodas">Baixar todas as listas</button><button class="btn prim" type="button" id="salvarDiv">Salvar divisão</button></div></div>`;
+    const baixar = i => { const p = E.partes[i]; baixarPlanilha(C.planilhaLista(E.arq, p.grupos, $('#fOrdDiv').value, window.XLSX), `Cobranca_Parcelamentos_${semAcento(primeiroNome(p.nome))}_${hoje()}.xlsx`); };
+    $$('[data-baixar]').forEach(b => b.addEventListener('click', () => baixar(+b.dataset.baixar)));
+    $('#baixarTodas').addEventListener('click', () => E.partes.forEach((_, i) => setTimeout(() => baixar(i), i * 400)));
+    $('#salvarDiv').addEventListener('click', async ev => {
+      const b = ev.target; b.disabled = true; b.textContent = 'Salvando…';
+      const itens = E.partes.flatMap(p => p.grupos.flatMap(g => g.itens.map(it => ({ id_parcelamento: it.id, funcionario_id: p.id, valor: it.valor }))));
+      const { data, error } = await sb.rpc('salvar_divisao', { p_itens: itens });
+      if (error) { toast(msgErro(error), true); b.disabled = false; b.textContent = 'Salvar divisão'; return; }
+      b.textContent = 'Divisão salva'; toast(`Divisão salva: ${NUM.format(data)} parcelamentos distribuídos.`);
+    });
+  });
 }
 
 // ---------------------------------------------------------------- CANCELAMENTOS

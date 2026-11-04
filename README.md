@@ -17,7 +17,7 @@ Sistema web para o controle diário de cobranças e para os relatórios mensal, 
 | Caminho | Conteúdo |
 |---|---|
 | `index.html`, `css/`, `js/` | o site |
-| `vendor/` | bibliotecas (supabase-js 2.117.2, Chart.js 4.4.1), servidas localmente |
+| `vendor/` | bibliotecas (supabase-js 2.117.2, Chart.js 4.4.1, SheetJS 0.18.5 para ler o SMAR e gerar a planilha da Assertiva), servidas localmente |
 | `supabase/schema.sql` | tabelas, regras de acesso, auditoria e função de relatório |
 | `supabase/test_rls.sql` | testes das regras de acesso (usados com `test_stub.sql` num PostgreSQL local) |
 
