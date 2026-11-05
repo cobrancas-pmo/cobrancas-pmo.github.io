@@ -1414,22 +1414,23 @@ async function telaCampanhaNova() {
     const cf = r.conf;
     const gOutros = E.grupos.filter(g => g.itens.some(i => E.outros.has(i.id))).length;
     const gJa = E.grupos.filter(g => g.itens.some(i => E.ja.has(i.id))).length;
-    const aptos = E.grupos.filter(g => C.apto(g, ['SMS', 'E-mail']) && !g.itens.some(i => E.outros.has(i.id))).length;
+    const aptos = E.grupos.filter(g => !g.itens.some(i => E.outros.has(i.id))).length;
+    const incompletos = E.grupos.filter(g => C.pendencias(g, ['SMS', 'E-mail']).length).length;
     const li = (m, cls, t) => `<li><span class="m ${cls}">${m}</span><span>${t}</span></li>`;
     const tipos = [...new Set(r.itens.map(i => i.tipo).filter(Boolean))];
     box.innerHTML = `<h3 style="margin-top:1rem">Conferência do arquivo</h3><ul class="checks">
-      ${li('✓', 'ok', `<b>${NUM.format(cf.validos)}</b> parcelamentos lidos de <b>${NUM.format(E.grupos.length)}</b> contribuintes · <b>${NUM.format(aptos)}</b> contribuintes prontos para a campanha (com CPF/CNPJ e celular ou e-mail)`)}
+      ${li('✓', 'ok', `<b>${NUM.format(cf.validos)}</b> parcelamentos lidos de <b>${NUM.format(E.grupos.length)}</b> contribuintes · <b>${NUM.format(aptos)}</b> contribuintes podem ir para a campanha`)}
+      ${incompletos ? li('!', 'at', `<b>${NUM.format(incompletos)}</b> contribuintes têm dado faltando ou suspeito (CPF/CNPJ, telefone ou e-mail). Eles <b>vão para a planilha mesmo assim</b>, com o que houver — a Assertiva pode recusar alguns na importação. Na lista do passo 2 eles aparecem marcados.`) : ''}
       ${li('✓', 'ok', `<b>${NUM.format(cf.validos - cf.semCel)}</b> com celular · <b>${NUM.format(cf.validos - cf.semEmail)}</b> com e-mail${tipos.length ? ` · Tipo de cobrança: ${tipos.map(esc).join(' e ')} (pelas parcelas vencidas)` : ''}`)}
-      ${!r.temDoc ? li('!', 'at', 'O arquivo não tem a coluna <b>CPF/CNPJ</b>. A Assertiva exige o documento: complete a coluna ou envie o segundo arquivo.') : (cf.semDoc + cf.docInvalido) ? li('!', 'at', `<b>${NUM.format(cf.semDoc)}</b> sem CPF/CNPJ${cf.docInvalido ? ` e <b>${NUM.format(cf.docInvalido)}</b> com CPF/CNPJ inválido` : ''}: não vão para a Assertiva.`) : ''}
+      ${!r.temDoc ? li('!', 'at', 'O arquivo não tem a coluna <b>CPF/CNPJ</b>. A planilha sai com o documento em branco e a Assertiva exige o documento: se puder, complete a coluna ou envie o segundo arquivo.') : (cf.semDoc + cf.docInvalido) ? li('!', 'at', `<b>${NUM.format(cf.semDoc)}</b> sem CPF/CNPJ${cf.docInvalido ? ` e <b>${NUM.format(cf.docInvalido)}</b> com CPF/CNPJ inválido` : ''}: vão para a planilha assim mesmo (a Assertiva exige CPF/CNPJ válido e pode recusá-los).`) : ''}
       ${!r.temEmail ? li('–', 'fo', 'O arquivo não tem a coluna <b>E-mail</b>: a campanha sai só por SMS.') : ''}
-      ${cf.semContato ? li('!', 'at', `<b>${NUM.format(cf.semContato)}</b> parcelamentos sem celular nem e-mail ficam de fora.`) : ''}
       ${gOutros ? li('!', 'at', `<b>${NUM.format(gOutros)}</b> contribuintes estão na lista de outro cobrador e ficam de fora.`) : ''}
       ${gJa ? li('–', 'fo', `<b>${NUM.format(gJa)}</b> contribuintes já receberam campanha e não entram de novo (dá para incluir no passo 2).`) : ''}
       ${cf.rodape || cf.repetidos || cf.revogados ? li('–', 'fo', `Retirados automaticamente: ${[cf.rodape && `${cf.rodape} linha(s) sem Id (título/rodapé)`, cf.repetidos && `${cf.repetidos} parcelamento(s) repetido(s)`, cf.revogados && `${cf.revogados} "Revogado"`].filter(Boolean).join(', ')}`) : ''}
       ${cf.completadosPeloExtra ? li('✓', 'ok', `<b>${NUM.format(cf.completadosPeloExtra)}</b> CPF/CNPJ completados pelo segundo arquivo.`) : ''}
     </ul>`;
     $('#ir2').disabled = !aptos;
-    if (!aptos) box.insertAdjacentHTML('beforeend', '<div class="aviso erro">Nenhum contribuinte pode ir para a campanha: falta CPF/CNPJ ou contato.</div>');
+    if (!aptos) box.insertAdjacentHTML('beforeend', '<div class="aviso erro">Nenhum contribuinte disponível: todos estão na lista de outro cobrador.</div>');
   }
   const escolher = async (inp, qual) => {
     const file = inp.files[0]; if (!file) return;
@@ -1458,8 +1459,8 @@ async function telaCampanhaNova() {
     $('#tbHoje').innerHTML = lista.length ? lista.map(g => {
       const jaRec = g.itens.map(i => E.ja.get(i.id)).filter(Boolean)[0];
       return `<tr class="${marcados.has(g.chave) ? '' : 'fora'}"><td class="cx"><input type="checkbox" data-k="${esc(g.chave)}" ${marcados.has(g.chave) ? 'checked' : ''} aria-label="Incluir ${esc(g.itens[0].id)}"></td>
-      <td>${g.itens.map(i => `<strong>${esc(i.id)}</strong>`).join('<br>')}</td><td>${esc(g.nome)}${jaRec ? `<div class="dica">já recebeu em ${fmtData(jaRec.data_envio)}</div>` : ''}</td><td>${esc(g.itens[0].setor || g.itens[0].setorSmar || '')}</td>
-      <td class="num">${BRL.format(g.valor)}</td><td class="num">${g.diasAtraso ? NUM.format(g.diasAtraso) : ''}</td><td>${cn.includes('SMS') && g.cel ? esc(C.fmtTel(g.cel)) : '<span class="dica">—</span>'}</td><td>${cn.includes('E-mail') && g.email ? 'sim' : '<span class="dica">—</span>'}</td></tr>`;
+      <td>${g.itens.map(i => `<strong>${esc(i.id)}</strong>`).join('<br>')}</td><td>${esc(g.nome)}${jaRec ? `<div class="dica">já recebeu em ${fmtData(jaRec.data_envio)}</div>` : ''}${(pd => pd.length ? `<div><span class="tag Em-andamento" title="Vai para a planilha assim mesmo">${esc(pd.join(' · '))}</span></div>` : '')(C.pendencias(g, cn))}</td><td>${esc(g.itens[0].setor || g.itens[0].setorSmar || '')}</td>
+      <td class="num">${BRL.format(g.valor)}</td><td class="num">${g.diasAtraso ? NUM.format(g.diasAtraso) : ''}</td><td>${cn.includes('SMS') && g.cel ? esc(C.fmtTel(g.cel)) : cn.includes('SMS') && g.telBruto ? `<span class="dica">${esc(g.telBruto)}?</span>` : '<span class="dica">—</span>'}</td><td>${cn.includes('E-mail') && g.email ? 'sim' : cn.includes('E-mail') && g.emailBruto ? '<span class="dica">suspeito</span>' : '<span class="dica">—</span>'}</td></tr>`;
     }).join('') : '<tr><td colspan="8" class="vazio">Nenhum contribuinte disponível com esses canais.</td></tr>';
     resumo();
   }
@@ -1482,9 +1483,11 @@ async function telaCampanhaNova() {
   $('#ir3').addEventListener('click', () => {
     const sel = selecionados(), cn = canais();
     const parc = sel.reduce((a, g) => a + g.itens.length, 0);
-    const nSms = cn.includes('SMS') ? sel.filter(g => g.cel).length : 0, nMail = cn.includes('E-mail') ? sel.filter(g => g.email).length : 0;
+    const nSms = cn.includes('SMS') ? sel.filter(g => g.cel || g.telBruto).length : 0, nMail = cn.includes('E-mail') ? sel.filter(g => g.email || g.emailBruto).length : 0;
+    const nInc = sel.filter(g => C.pendencias(g, cn).length).length;
     $('#resumo3').innerHTML = `<ul class="checks"><li><span class="m ok">✓</span><span><b>${NUM.format(sel.length)}</b> contribuinte(s), <b>${NUM.format(parc)}</b> parcelamento(s)</span></li>
       <li><span class="m ok">✓</span><span>${cn.includes('SMS') ? `SMS para <b>${NUM.format(nSms)}</b>` : ''}${cn.length === 2 ? ' · ' : ''}${cn.includes('E-mail') ? `e-mail para <b>${NUM.format(nMail)}</b>` : ''}</span></li>
+      ${nInc ? `<li><span class="m at">!</span><span><b>${NUM.format(nInc)}</b> com dado faltando ou suspeito vão na planilha assim mesmo; a Assertiva pode recusar alguns ao importar.</span></li>` : ''}
       <li><span class="m fo">–</span><span>A coluna "valor" leva o saldo em aberto do parcelamento (a Assertiva exige). Se a mensagem mostra ou não o valor, depende do modelo de mensagem configurado na Assertiva.</span></li></ul>
       <ol class="instr"><li>Clique em <b>Registrar campanha e baixar planilha</b>.</li><li>Na Assertiva, importe a planilha na carteira da campanha (Gestão de Cobrança → importar dívidas).</li><li>Depois de 1 a 2 horas, mande o WhatsApp pelo CWMKT e marque no lançamento, como de costume.</li></ol>`;
     $('#aviso3').innerHTML = `Ao registrar, nada entra no Lançar ainda. Quando o contribuinte chamar no WhatsApp e um agente <b>cadastrado no sistema</b> responder, o lançamento é criado no Lançar de quem respondeu primeiro, na data da resposta (SMS "Enviado" quando o SMS for usado). Se quem responder não for cadastrado, o nome dele fica anotado em Relatórios → Campanhas → Ver casos.`;

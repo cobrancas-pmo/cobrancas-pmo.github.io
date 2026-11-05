@@ -104,7 +104,7 @@
     if (!d) return { doc: null, valido: false, vazio: true };
     if (d.length <= 11) d = d.padStart(11, '0'); else if (d.length <= 14) d = d.padStart(14, '0');
     const valido = d.length === 11 ? cpfValido(d) : d.length === 14 ? cnpjValido(d) : false;
-    return { doc: valido ? d : null, valido, vazio: false };
+    return { doc: valido ? d : null, valido, vazio: false, bruto: d };
   }
   function email(v) {
     const m = txt(v).toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/);
@@ -153,9 +153,13 @@
         if (!tels.some(t => t.cel) && ex.tels.length) tels = tels.concat(ex.tels);
       }
       const cel = (tels.find(t => t.cel) || {}).num || null;
+      // dados que parecem errados ou incompletos também vão para a planilha (pedido do usuário, 05/11/2026)
+      const telBruto = cel ? null : ((tels[0] || {}).num || (I.tel != null ? txt(l[I.tel]).replace(/\D/g, '').slice(0, 13) : '') || null);
+      const emailBruto = e ? null : (I.email != null && txt(l[I.email]).includes('@') ? txt(l[I.email]).slice(0, 120) : null);
       const qv = numero(I.qtdVenc != null ? l[I.qtdVenc] : null);
       const it = {
         id, nome: txt(l[I.nome]).replace(/\s+/g, ' '), crc, doc: d.doc, email: e, cel,
+        docBruto: d.doc ? null : (d.bruto || null), telBruto, emailBruto,
         valor: numero(l[I.valor]), venc: data(l[I.venc]),
         origem: I.origem != null ? txt(l[I.origem]).replace(/\.0$/, '') : '',
         setorSmar: I.setor != null ? txt(l[I.setor]) : '', setor: I.setor != null ? setorSistema(l[I.setor]) : null,
@@ -182,7 +186,8 @@
       chave: k, itens: lista, nome: lista[0].nome,
       valor: lista.reduce((a, x) => a + (x.valor || 0), 0),
       diasAtraso: Math.max(0, ...lista.map(x => x.diasAtraso || 0)),
-      doc: lista.find(x => x.doc)?.doc || null, cel: lista.find(x => x.cel)?.cel || null, email: lista.find(x => x.email)?.email || null
+      doc: lista.find(x => x.doc)?.doc || null, cel: lista.find(x => x.cel)?.cel || null, email: lista.find(x => x.email)?.email || null,
+      docBruto: lista.find(x => x.docBruto)?.docBruto || null, telBruto: lista.find(x => x.telBruto)?.telBruto || null, emailBruto: lista.find(x => x.emailBruto)?.emailBruto || null
     }));
   }
   const ORDENS = {
@@ -191,9 +196,19 @@
     atraso: (a, b) => b.diasAtraso - a.diasAtraso || b.valor - a.valor
   };
   // pode entrar na campanha pelos canais escolhidos?
-  function apto(g, canais) {
-    if (!g.doc) return false;
-    return (canais.includes('SMS') && !!g.cel) || (canais.includes('E-mail') && !!g.email);
+  // desde 05/11/2026 todos entram na planilha, mesmo sem CPF/CNPJ ou contato (a Assertiva decide o que aceita)
+  function apto(g, canais) { return true; }
+  // o que falta ou parece errado no contribuinte (para avisar na tela)
+  function pendencias(g, canais) {
+    const p = [];
+    if (!g.doc) p.push(g.docBruto ? 'CPF/CNPJ inválido' : 'sem CPF/CNPJ');
+    const temCel = canais.includes('SMS') && (g.cel || g.telBruto), temMail = canais.includes('E-mail') && (g.email || g.emailBruto);
+    if (!temCel && !temMail) p.push('sem contato');
+    else {
+      if (canais.includes('SMS') && !g.cel && g.telBruto) p.push(/^\d\d[2-5]\d{7}$/.test(g.telBruto) ? 'telefone fixo (não recebe SMS)' : 'telefone suspeito');
+      if (canais.includes('E-mail') && !g.email && g.emailBruto) p.push('e-mail suspeito');
+    }
+    return p;
   }
 
   // ---------- divisão em partes de valor parecido ----------
@@ -215,8 +230,9 @@
     const linhas = [ASSERTIVA];
     for (const g of grupos) for (const it of g.itens) {
       const obs = [it.origem && 'Origem ' + it.origem, it.setorSmar].filter(Boolean).join(' - ');
-      linhas.push([g.doc, it.nome, it.id, it.valor ?? 0, dataBR(it.venc), obs,
-        sms && g.cel ? Number(g.cel) : null, mail && g.email ? g.email : null, 1, 1, 'não', null, codigo]);
+      const tel = sms ? (g.cel || g.telBruto) : null, mailV = mail ? (g.email || g.emailBruto) : null;
+      linhas.push([g.doc || g.docBruto || '', it.nome, it.id, it.valor ?? 0, dataBR(it.venc), obs,
+        tel ? Number(tel) : null, mailV || null, 1, 1, 'não', null, codigo]);
     }
     const ws = XLSX.utils.aoa_to_sheet(linhas);
     // CPF/CNPJ como texto (não perde o zero à esquerda) e Id como texto
@@ -251,6 +267,6 @@
   }
   const fmtTel = c => (c ? `(${c.slice(0, 2)}) ${c.slice(2, c.length - 4)}-${c.slice(-4)}` : '');
 
-  root.Campanhas = { lerArquivo, montar, agrupar, apto, dividir, ORDENS, planilhaAssertiva, planilhaLista, hashTelefone, fmtTel, dataBR,
+  root.Campanhas = { lerArquivo, montar, agrupar, apto, pendencias, dividir, ORDENS, planilhaAssertiva, planilhaLista, hashTelefone, fmtTel, dataBR,
     _t: { telefones, documento, email, numero, data, cpfValido, cnpjValido } };
 })(typeof window !== 'undefined' ? window : globalThis);
