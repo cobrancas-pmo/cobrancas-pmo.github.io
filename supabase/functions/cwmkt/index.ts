@@ -118,10 +118,12 @@ async function atribuir(conv: number, item: any): Promise<string> {
   return `atribuída: ${ag ? 'agente ok' : 'AGENTE NÃO ENCONTRADO'} · ${tc ? 'time ok' : 'TIME NÃO ENCONTRADO'} · ${et ? 'etiqueta ' + et : 'etiqueta do cobrador não encontrada'}`;
 }
 
-async function registrar(evento: string, conv: number | null, phone: unknown, tipo: string, quando: string) {
+async function registrar(evento: string, conv: number | null, phone: unknown, tipo: string, quando: string,
+                         agente: { email: string | null; nome: string | null } | null = null) {
   const hs = await hashes(phone);
   if (!hs.length && !conv) return null;
-  const { data, error } = await db.rpc('cwmkt_registrar', { p_hashes: hs, p_tipo: tipo, p_quando: quando, p_conversa: conv });
+  const { data, error } = await db.rpc('cwmkt_registrar', { p_hashes: hs, p_tipo: tipo, p_quando: quando, p_conversa: conv,
+    p_agente_email: agente?.email ?? null, p_agente_nome: agente?.nome ?? null });
   if (error) throw new Error(error.message);
   return data;
 }
@@ -169,9 +171,16 @@ async function webhook(req: Request, url: URL) {
       const ligada = convId ? (await db.from('campanha_itens').select('id').eq('cwmkt_conversa', convId).limit(1)).data?.length : 0;
       const diag = `tipo=${mt} remetente=${b.sender?.type ?? '-'} fone=${phone ? 'sim' : 'não'} status=${conv.status ?? '-'}`;
       if (!tipo) { if (ligada) await log(ev, convId, 'ignorada: ' + diag); return json({ ok: true, ignorado: 'mensagem do bot ou do sistema' }); }
-      const item = await registrar(ev, convId, phone, tipo, quando);
+      // quem respondeu (agente humano do CWMKT): o lançamento da campanha vai para ele, se for cadastrado no sistema
+      let agente: { email: string | null; nome: string | null } | null = null;
+      if (tipo === 'saida') {
+        const sid = Number(b.sender?.id) || null;
+        const ag = sid ? (await agentes().catch(() => [])).find((a: any) => Number(a?.id) === sid) : null;
+        agente = { email: ag?.email || b.sender?.email || null, nome: ag?.name || b.sender?.available_name || b.sender?.name || null };
+      }
+      const item = await registrar(ev, convId, phone, tipo, quando, agente);
       if (!item) { if (ligada) await log(ev, convId, 'não reconhecida: ' + diag); return json({ ok: true, ignorado: 'não é de campanha' }); }
-      let res = tipo === 'entrada' ? 'contribuinte respondeu' : 'cobrador mandou WhatsApp';
+      let res = tipo === 'entrada' ? 'contribuinte respondeu' : 'agente respondeu no WhatsApp' + (item.atendimento ? ' · ' + item.atendimento : '');
       if (tipo === 'entrada' && convId && !item.ja_atribuida && conv.status === 'open') res += ' · ' + await atribuir(convId, item);
       await log(ev, convId, `${item.campanha}: ${res}`);
       return json({ ok: true });

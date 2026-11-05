@@ -1323,21 +1323,25 @@ function desenharCampanhas(box, R) {
       <tr class="total"><td>Total</td><td class="num">${NUM.format(T.campanhas)}</td><td class="num">${NUM.format(T.parcelamentos)}</td><td class="num">${ret(T.antes)}</td><td class="num">${ret(T.depois)}</td><td class="num">${NUM.format(T.pagos)}</td><td class="num">${BRL.format(T.valor)}</td></tr></tbody></table></div></div>
   </div>
   <div class="card"><h2>Campanhas do período</h2><div class="tabela-wrap"><table>
-    <thead><tr><th>Envio</th><th>Campanha</th><th>Cobrador</th><th>Canais</th><th class="num">Parcel.</th><th class="num">Antes WA</th><th class="num">Depois WA</th><th class="num">Pagos</th><th class="num">Valor</th><th></th></tr></thead>
+    <thead><tr><th>Envio</th><th>Campanha</th><th>Cobrador</th><th>Canais</th><th class="num">Parcel.</th><th class="num">Antes WA</th><th class="num">Depois WA</th><th class="num" title="Atendidos no WhatsApp por cadastrados no sistema (vão para o Lançar) + por outros agentes">Atendidos</th><th class="num">Pagos</th><th class="num">Valor</th><th></th></tr></thead>
     <tbody>${R.campanhas.map(c => `<tr><td>${fmtData(c.data_envio)}</td><td><strong>${esc(c.codigo)}</strong></td><td>${esc(c.cobrador)}</td><td>${esc((c.canais || []).join(' · '))}</td>
-      <td class="num">${NUM.format(c.parcelamentos)}</td><td class="num">${ret(c.antes)}</td><td class="num">${ret(c.depois)}</td><td class="num">${NUM.format(c.pagos)}</td><td class="num">${BRL.format(c.valor)}</td>
-      <td><button class="btn peq" type="button" data-casos="${c.id}">Ver casos</button></td></tr><tr class="casos" id="casos-${c.id}" hidden><td colspan="10"></td></tr>`).join('')}</tbody></table></div>
-    <p class="dica">${ehSup() ? 'Supervisão e administração veem as campanhas de todos.' : 'Você vê só as suas campanhas.'} O período considera a data de envio; pagamentos contam pelo lançamento ligado à campanha.</p></div>`;
+      <td class="num">${NUM.format(c.parcelamentos)}</td><td class="num">${ret(c.antes)}</td><td class="num">${ret(c.depois)}</td><td class="num">${ativo ? NUM.format(c.at_cad || 0) + (c.at_outro ? ` <span class="dica">+ ${NUM.format(c.at_outro)} outros</span>` : '') : '—'}</td><td class="num">${NUM.format(c.pagos)}</td><td class="num">${BRL.format(c.valor)}</td>
+      <td><button class="btn peq" type="button" data-casos="${c.id}">Ver casos</button></td></tr><tr class="casos" id="casos-${c.id}" hidden><td colspan="11"></td></tr>`).join('')}</tbody></table></div>
+    <p class="dica">${ehSup() ? 'Supervisão e administração veem as campanhas de todos.' : 'Você vê só as suas campanhas.'} O período considera a data de envio; pagamentos contam pelo lançamento ligado à campanha. O caso só entra no Lançar quando um agente cadastrado no sistema responde no WhatsApp (para quem respondeu primeiro, na data da resposta); quem foi atendido por outros agentes aparece em <b>Ver casos</b>.</p></div>`;
   $$('[data-casos]', box).forEach(b => b.addEventListener('click', async () => {
     const tr = $('#casos-' + b.dataset.casos); if (!tr.hidden) { tr.hidden = true; b.textContent = 'Ver casos'; return; }
     tr.hidden = false; b.textContent = 'Fechar'; const td = tr.firstElementChild; td.innerHTML = '<span class="dica">Carregando…</span>';
-    const { data, error } = await sb.from('campanha_itens').select('id_parcelamento,tem_email,retorno_em,wa_enviado_em,lancamento_id,lancamentos(id,data_contato,situacao,valor_pago,funcionario_id)').eq('campanha_id', b.dataset.casos).order('id');
+    const { data, error } = await sb.from('campanha_itens').select('id_parcelamento,tem_email,retorno_em,wa_enviado_em,lancamento_id,atendente_nome,atendido_por,atendido_em,lancamentos(id,data_contato,situacao,valor_pago,funcionario_id)').eq('campanha_id', b.dataset.casos).order('id');
     if (error) { td.innerHTML = `<span class="aviso erro">${esc(msgErro(error))}</span>`; return; }
-    td.innerHTML = `<div class="tabela-wrap"><table><thead><tr><th>Id parc.</th><th>E-mail</th><th>Respondeu no WhatsApp</th><th>Situação</th><th class="num">Pago</th><th></th></tr></thead><tbody>${(data || []).map(i => {
+    td.innerHTML = `<div class="tabela-wrap"><table><thead><tr><th>Id parc.</th><th>E-mail</th><th>Respondeu no WhatsApp</th><th>Atendimento</th><th>Situação</th><th class="num">Pago</th><th></th></tr></thead><tbody>${(data || []).map(i => {
       const l = i.lancamentos; const pode = l && (l.funcionario_id === S.user.id || ehAdmin());
+      const quem = i.atendido_por ? (S.perfis.find(p => p.id === i.atendido_por)?.nome || i.atendente_nome || '') : i.atendente_nome;
+      const atend = i.atendido_em ? `<span class="tag ${i.atendido_por ? 'Pago' : 'camp'}">${i.atendido_por ? 'No Lançar' : 'Agente não cadastrado'}</span><div class="dica">${esc(quem || '')} · ${new Date(i.atendido_em).toLocaleDateString('pt-BR')}</div>`
+        : i.retorno_em ? '<span class="tag Em-andamento">Aguardando atendimento</span>' : '<span class="dica">sem resposta</span>';
       return `<tr><td><strong>${esc(i.id_parcelamento)}</strong></td><td>${i.tem_email ? 'sim' : '—'}</td>
         <td>${i.retorno_em ? new Date(i.retorno_em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) + (i.wa_enviado_em && i.retorno_em >= i.wa_enviado_em ? ' (depois do WhatsApp)' : ' (antes do WhatsApp)') : '—'}</td>
-        <td>${l ? tag(catDe(l.situacao)) + `<div class="dica">${esc(l.situacao || '')}</div>` : '<span class="dica">lançamento excluído</span>'}</td>
+        <td>${atend}</td>
+        <td>${l ? tag(catDe(l.situacao)) + `<div class="dica">${esc(l.situacao || '')}</div>` : i.lancamento_id ? '<span class="dica">lançamento excluído</span>' : '—'}</td>
         <td class="num">${l && l.valor_pago != null && catDe(l.situacao) === 'Pago' ? BRL.format(l.valor_pago) : ''}</td>
         <td>${l ? (pode ? `<a class="btn peq" href="#/lancar?data=${l.data_contato}&editar=${l.id}">Abrir</a>` : `<a class="btn peq" href="#/buscar?q=${encodeURIComponent(i.id_parcelamento)}">Ver</a>`) : ''}</td></tr>`;
     }).join('')}</tbody></table></div>`;
@@ -1349,7 +1353,7 @@ async function telaCampanhaNova() {
   const C = window.Campanhas;
   const E = { arq: null, extra: null, nomeArq: '', nomeExtra: '', dados: null, grupos: [], ja: new Map(), outros: new Set(), resultado: null };
   app().innerHTML = `
-  <div class="cab"><div><h1>Nova campanha</h1><p class="sub">Escolha os contribuintes de hoje e baixe a planilha no modelo da Assertiva. Ao registrar, os lançamentos entram no seu Lançar de hoje.</p></div>
+  <div class="cab"><div><h1>Nova campanha</h1><p class="sub">Escolha os contribuintes de hoje e baixe a planilha no modelo da Assertiva. O caso entra no Lançar quando um agente cadastrado no sistema responder o contribuinte no WhatsApp.</p></div>
     <div class="acoes"><a class="btn" href="#/relatorios?ver=campanhas">Voltar às campanhas</a></div></div>
   <ol class="passos" id="passos"><li data-p="1" class="on"><span class="n">1</span>Arquivo</li><li data-p="2"><span class="n">2</span>Contribuintes de hoje</li><li data-p="3"><span class="n">3</span>Planilha da Assertiva</li></ol>
 
@@ -1483,7 +1487,7 @@ async function telaCampanhaNova() {
       <li><span class="m ok">✓</span><span>${cn.includes('SMS') ? `SMS para <b>${NUM.format(nSms)}</b>` : ''}${cn.length === 2 ? ' · ' : ''}${cn.includes('E-mail') ? `e-mail para <b>${NUM.format(nMail)}</b>` : ''}</span></li>
       <li><span class="m fo">–</span><span>A coluna "valor" leva o saldo em aberto do parcelamento (a Assertiva exige). Se a mensagem mostra ou não o valor, depende do modelo de mensagem configurado na Assertiva.</span></li></ul>
       <ol class="instr"><li>Clique em <b>Registrar campanha e baixar planilha</b>.</li><li>Na Assertiva, importe a planilha na carteira da campanha (Gestão de Cobrança → importar dívidas).</li><li>Depois de 1 a 2 horas, mande o WhatsApp pelo CWMKT e marque no lançamento, como de costume.</li></ol>`;
-    $('#aviso3').innerHTML = `Ao registrar, o sistema cria os lançamentos de hoje no seu Lançar (SMS marcado como "Enviado" quando o SMS for usado). Quem já tem lançamento em aberto não ganha outro: a campanha é anotada no lançamento existente.`;
+    $('#aviso3').innerHTML = `Ao registrar, nada entra no Lançar ainda. Quando o contribuinte chamar no WhatsApp e um agente <b>cadastrado no sistema</b> responder, o lançamento é criado no Lançar de quem respondeu primeiro, na data da resposta (SMS "Enviado" quando o SMS for usado). Se quem responder não for cadastrado, o nome dele fica anotado em Relatórios → Campanhas → Ver casos.`;
     passo(3);
   });
   $('#btnReg').addEventListener('click', async () => {
@@ -1504,7 +1508,7 @@ async function telaCampanhaNova() {
       E.resultado = { wb, nome };
       $('#acoes3').hidden = true; $('#aviso3').hidden = true;
       const fe = $('#feito3'); fe.hidden = false;
-      fe.innerHTML = `<div class="aviso ok">Campanha <b>${esc(data.codigo)}</b> registrada: ${NUM.format(data.novos)} lançamento(s) criado(s)${data.marcados ? ` e ${NUM.format(data.marcados)} lançamento(s) em aberto marcado(s)` : ''} no seu Lançar de hoje. A planilha foi baixada.</div>
+      fe.innerHTML = `<div class="aviso ok">Campanha <b>${esc(data.codigo)}</b> registrada com ${NUM.format(data.itens || 0)} parcelamento(s). A planilha foi baixada. Os casos entram no Lançar quando um agente cadastrado responder no WhatsApp.</div>
         <div class="acoes"><button class="btn" type="button" id="baixarDeNovo">Baixar a planilha de novo</button><a class="btn" href="#/lancar">Ir para o Lançar</a><a class="btn prim" href="#/relatorios?ver=campanhas">Ver campanhas</a></div>`;
       $('#baixarDeNovo').addEventListener('click', () => baixarPlanilha(E.resultado.wb, E.resultado.nome));
       $$('#passos li').forEach(li => { li.classList.remove('on'); li.classList.add('feito'); li.querySelector('.n').textContent = '✓'; });
