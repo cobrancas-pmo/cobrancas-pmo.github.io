@@ -1267,8 +1267,92 @@ const alternaRel = ver => `<div class="alterna nao-imprimir" role="tablist" aria
 const primeiroNome = n => String(n || '').trim().split(/\s+/)[0] || 'Cobrador';
 const semAcento = s => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-// ---------- Relatórios → Campanhas ----------
+// ---------- Relatórios → Campanhas: atendimentos no WhatsApp (desde 06/11/2026) ----------
+// O disparo em massa é feito por outro sistema; o contribuinte responde por um botão e a conversa nasce no CWMKT.
+// A função cwmkt grava cada conversa que começou por uma das frases (Administração → Frases dos atendimentos)
+// e o PRIMEIRO agente atribuído. Aqui só se conta: nada vai para o Lançar.
+const ORDEM_GATILHO = ['Pagar agora', 'Quero parcelar', 'Cobrança manual'];
+const ordGat = (a, b) => { const ia = ORDEM_GATILHO.indexOf(a), ib = ORDEM_GATILHO.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b); };
 async function telaCampanhas(params) {
+  if (params.antigas) return telaCampanhasAntigas(params);
+  const [ya, ma] = hoje().split('-').map(Number);
+  let ini = `${ya}-${pad(ma)}-01`, fim = `${ya}-${pad(ma)}-${pad(ultimoDia(ya, ma))}`;
+  try { const a = localStorage.getItem('rel_ini'), b = localStorage.getItem('rel_fim'); if (/^\d{4}-\d\d-\d\d$/.test(a) && /^\d{4}-\d\d-\d\d$/.test(b) && a <= b) { ini = a; fim = b; } } catch (_) {}
+  app().innerHTML = `
+  <div class="cab"><div><h1>Relatórios</h1><p class="sub">Atendimentos no WhatsApp que começaram pelos botões da campanha ou pela mensagem da cobrança manual, contados para o 1º atendente atribuído.</p></div></div>
+  ${alternaRel('campanhas')}
+  <form class="card" id="fAtWa"><div class="linha">
+    <label class="campo">De<input type="date" name="ini" value="${ini}" required></label>
+    <label class="campo">a<input type="date" name="fim" value="${fim}" required></label>
+    ${ehSup() ? '<label class="campo">Atendente<select name="ag"><option value="">Todos os atendentes</option></select></label>' : ''}
+    <button class="btn prim" type="submit">Gerar</button></div></form>
+  <div id="relAtWa"><p class="carregando">Calculando…</p></div>
+  <p class="dica nao-imprimir"><a href="#/relatorios?ver=campanhas&antigas=1">Campanhas antigas de SMS/e-mail pela Assertiva</a></p>`;
+  const f = $('#fAtWa'); let linhas = [];
+  const desenhar = () => desenharAtendimentosWa($('#relAtWa'), linhas, f.ini.value, f.fim.value, f.ag ? f.ag.value : '');
+  const gerar = async () => {
+    if (!f.ini.value || !f.fim.value || f.ini.value > f.fim.value) return toast('Período inválido.', true);
+    try { localStorage.setItem('rel_ini', f.ini.value); localStorage.setItem('rel_fim', f.fim.value); } catch (_) {}
+    const box = $('#relAtWa'); box.innerHTML = '<p class="carregando">Calculando…</p>';
+    const d = new Date(f.fim.value + 'T12:00:00'); d.setDate(d.getDate() + 1);
+    const ate = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T00:00:00-03:00`;
+    linhas = [];
+    for (let de = 0; ; de += 1000) {
+      const { data, error } = await sb.from('atendimentos_wa').select('conversa,gatilho,iniciada_em,agente_nome,usuario_id,atribuido_em,link')
+        .gte('iniciada_em', f.ini.value + 'T00:00:00-03:00').lt('iniciada_em', ate).order('iniciada_em').range(de, de + 999);
+      if (error) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(error))}</div>`; return; }
+      linhas.push(...data); if (data.length < 1000) break;
+    }
+    if (f.ag) {
+      const atual = f.ag.value, nomes = [...new Set(linhas.map(nomeAtWa))].sort((a, b) => a.localeCompare(b));
+      f.ag.innerHTML = '<option value="">Todos os atendentes</option>' + nomes.map(n => `<option${n === atual ? ' selected' : ''}>${esc(n)}</option>`).join('');
+    }
+    desenhar();
+  };
+  f.addEventListener('submit', e => { e.preventDefault(); gerar(); });
+  if (f.ag) f.ag.addEventListener('change', desenhar);
+  gerar();
+}
+const nomeAtWa = l => l.usuario_id ? (S.perfis.find(p => p.id === l.usuario_id)?.nome || l.agente_nome || 'Atendente') : (String(l.agente_nome || '').trim() || 'Sem atendente');
+function desenharAtendimentosWa(box, todas, ini, fim, ag) {
+  const L = ag ? todas.filter(l => nomeAtWa(l) === ag) : todas;
+  const titulo = `${fmtData(ini)} a ${fmtData(fim)}`;
+  if (!L.length) { box.innerHTML = `<div class="card"><p class="vazio">Nenhum atendimento de campanha neste período.</p><p class="dica" style="text-align:center">Os atendimentos aparecem aqui quando o contribuinte aperta um botão da campanha no WhatsApp, ou quando a cobrança manual começa pela mensagem pronta.</p></div>`; return; }
+  const gats = [...new Set([...ORDEM_GATILHO, ...L.map(l => l.gatilho)])].sort(ordGat);
+  const conta = (arr, g) => arr.filter(l => l.gatilho === g).length;
+  const sem = L.filter(l => !String(l.agente_nome || '').trim());
+  const grupos = new Map();
+  for (const l of L) { const n = String(l.agente_nome || '').trim() ? nomeAtWa(l) : ''; if (!grupos.has(n)) grupos.set(n, []); grupos.get(n).push(l); }
+  const ordem = [...grupos.keys()].sort((a, b) => (a === '') - (b === '') || grupos.get(b).length - grupos.get(a).length || a.localeCompare(b));
+  const k = (rot, val, det = '', cls = '') => `<div class="kpi ${cls}"><div class="rot">${rot}</div><div class="val">${val}</div>${det ? `<div class="det">${det}</div>` : ''}</div>`;
+  box.innerHTML = `
+  <h2 class="tit-rel">Atendimentos de campanha no WhatsApp · ${titulo}${ag ? ' · ' + esc(ag) : ''}</h2>
+  <div class="kpis">
+    ${k('Total', NUM.format(L.length), '', 'destaque')}
+    ${gats.map(g => k(esc(g), NUM.format(conta(L, g)))).join('')}
+    ${k('Sem atendente', NUM.format(sem.length), 'ninguém pegou a conversa')}
+  </div>
+  <div class="card"><div class="tabela-wrap"><table>
+    <thead><tr><th>Atendente (1º atribuído)</th>${gats.map(g => `<th class="num">${esc(g)}</th>`).join('')}<th class="num">Total</th><th></th></tr></thead>
+    <tbody>${ordem.map((n, i) => { const G = grupos.get(n); const login = G.some(l => l.usuario_id);
+      return `<tr><td>${n ? esc(n) + (login ? '' : ' <span class="tag Sem-situacao" title="Atendente do CWMKT sem acesso ao sistema">sem login</span>') : '<span class="dica">Sem atendente</span>'}</td>
+        ${gats.map(g => `<td class="num">${NUM.format(conta(G, g))}</td>`).join('')}<td class="num"><strong>${NUM.format(G.length)}</strong></td>
+        <td><button class="btn peq nao-imprimir" type="button" data-conv="${i}">Ver conversas</button></td></tr>
+        <tr class="casos" id="conv-${i}" hidden><td colspan="${gats.length + 3}"></td></tr>`; }).join('')}
+      <tr class="total"><td>Total</td>${gats.map(g => `<td class="num">${NUM.format(conta(L, g))}</td>`).join('')}<td class="num">${NUM.format(L.length)}</td><td></td></tr></tbody></table></div>
+    <p class="dica">Conta cada conversa uma vez, na data em que começou, para o primeiro atendente atribuído a ela no CWMKT (mesmo que depois passe para outro). "Sem login" = atendente do CWMKT que não tem acesso ao sistema. ${ehSup() ? 'Supervisão e administração veem toda a equipe.' : 'Você vê só os seus atendimentos.'}</p></div>`;
+  $$('[data-conv]', box).forEach(b => b.addEventListener('click', () => {
+    const tr = $('#conv-' + b.dataset.conv); if (!tr.hidden) { tr.hidden = true; b.textContent = 'Ver conversas'; return; }
+    tr.hidden = false; b.textContent = 'Fechar';
+    const G = grupos.get(ordem[Number(b.dataset.conv)]);
+    const dh = t => t ? new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
+    tr.firstElementChild.innerHTML = `<div class="tabela-wrap"><table><thead><tr><th>Começou</th><th>Como começou</th><th>Atribuída em</th><th>Conversa</th></tr></thead><tbody>${G.map(l =>
+      `<tr><td>${dh(l.iniciada_em)}</td><td>${esc(l.gatilho)}</td><td>${dh(l.atribuido_em)}</td><td>${l.link ? `<a class="btn peq" href="${esc(l.link)}" target="_blank" rel="noopener">Abrir no CWMKT #${l.conversa}</a>` : '#' + l.conversa}</td></tr>`).join('')}</tbody></table></div>`;
+  }));
+}
+
+// ---------- Relatórios → Campanhas antigas (SMS/e-mail pela Assertiva) ----------
+async function telaCampanhasAntigas(params) {
   const [ya, ma] = hoje().split('-').map(Number);
   let ini = `${ya}-${pad(ma)}-01`, fim = `${ya}-${pad(ma)}-${pad(ultimoDia(ya, ma))}`;
   try { const a = localStorage.getItem('rel_ini'), b = localStorage.getItem('rel_fim'); if (/^\d{4}-\d\d-\d\d$/.test(a) && /^\d{4}-\d\d-\d\d$/.test(b) && a <= b) { ini = a; fim = b; } } catch (_) {}
@@ -1276,6 +1360,7 @@ async function telaCampanhas(params) {
   <div class="cab"><div><h1>Relatórios</h1><p class="sub">Campanhas de SMS e e-mail pela Assertiva: quantos receberam, quantos responderam pelo WhatsApp e quantos pagaram.</p></div>
     <div class="acoes">${ehSup() ? '<a class="btn" href="#/campanha-dividir">Dividir lista do SMAR</a>' : ''}<a class="btn prim" href="#/campanha-nova">+ Nova campanha</a></div></div>
   ${alternaRel('campanhas')}
+  <p class="dica nao-imprimir"><a href="#/relatorios?ver=campanhas">← Voltar aos atendimentos no WhatsApp</a></p>
   <form class="card" id="fCamp"><div class="linha">
     <label class="campo">Enviadas de<input type="date" name="ini" value="${ini}" required></label>
     <label class="campo">a<input type="date" name="fim" value="${fim}" required></label>
@@ -1354,7 +1439,7 @@ async function telaCampanhaNova() {
   const E = { arq: null, extra: null, nomeArq: '', nomeExtra: '', dados: null, grupos: [], ja: new Map(), outros: new Set(), resultado: null };
   app().innerHTML = `
   <div class="cab"><div><h1>Nova campanha</h1><p class="sub">Escolha os contribuintes de hoje e baixe a planilha no modelo da Assertiva. O caso entra no Lançar quando um agente cadastrado no sistema responder o contribuinte no WhatsApp.</p></div>
-    <div class="acoes"><a class="btn" href="#/relatorios?ver=campanhas">Voltar às campanhas</a></div></div>
+    <div class="acoes"><a class="btn" href="#/relatorios?ver=campanhas&antigas=1">Voltar às campanhas</a></div></div>
   <ol class="passos" id="passos"><li data-p="1" class="on"><span class="n">1</span>Arquivo</li><li data-p="2"><span class="n">2</span>Contribuintes de hoje</li><li data-p="3"><span class="n">3</span>Planilha da Assertiva</li></ol>
 
   <div class="card" data-passo="1">
@@ -1512,7 +1597,7 @@ async function telaCampanhaNova() {
       $('#acoes3').hidden = true; $('#aviso3').hidden = true;
       const fe = $('#feito3'); fe.hidden = false;
       fe.innerHTML = `<div class="aviso ok">Campanha <b>${esc(data.codigo)}</b> registrada com ${NUM.format(data.itens || 0)} parcelamento(s). A planilha foi baixada. Os casos entram no Lançar quando um agente cadastrado responder no WhatsApp.</div>
-        <div class="acoes"><button class="btn" type="button" id="baixarDeNovo">Baixar a planilha de novo</button><a class="btn" href="#/lancar">Ir para o Lançar</a><a class="btn prim" href="#/relatorios?ver=campanhas">Ver campanhas</a></div>`;
+        <div class="acoes"><button class="btn" type="button" id="baixarDeNovo">Baixar a planilha de novo</button><a class="btn" href="#/lancar">Ir para o Lançar</a><a class="btn prim" href="#/relatorios?ver=campanhas&antigas=1">Ver campanhas</a></div>`;
       $('#baixarDeNovo').addEventListener('click', () => baixarPlanilha(E.resultado.wb, E.resultado.nome));
       $$('#passos li').forEach(li => { li.classList.remove('on'); li.classList.add('feito'); li.querySelector('.n').textContent = '✓'; });
     } catch (e) {
@@ -1523,13 +1608,13 @@ async function telaCampanhaNova() {
 
 // ---------- Dividir a lista do SMAR (supervisão) ----------
 async function telaCampanhaDividir() {
-  if (!ehSup()) { location.hash = '#/relatorios?ver=campanhas'; return; }
+  if (!ehSup()) { location.hash = '#/relatorios?ver=campanhas&antigas=1'; return; }
   const C = window.Campanhas;
   const E = { arq: null, nome: '', grupos: [], partes: null };
   const ativos = S.perfis.filter(p => p.ativo);
   app().innerHTML = `
   <div class="cab"><div><h1>Dividir lista do SMAR</h1><p class="sub">Reparte o arquivo completo em listas de valor parecido, uma por cobrador. Contribuinte com vários parcelamentos fica inteiro com um cobrador só.</p></div>
-    <div class="acoes"><a class="btn" href="#/relatorios?ver=campanhas">Voltar às campanhas</a></div></div>
+    <div class="acoes"><a class="btn" href="#/relatorios?ver=campanhas&antigas=1">Voltar às campanhas</a></div></div>
   <div class="card">
     <label class="arquivo" for="arqDiv"><span class="ico vazio2" id="icoDiv">XLS</span><span class="txt"><b id="nomeDiv">Escolher o arquivo do SMAR</b><span class="dica" id="detDiv">Arquivo "Parcelamento Vencido" (.xls ou .xlsx), do jeito que sai do sistema.</span></span><span class="btn peq">Escolher arquivo</span>
       <input type="file" id="arqDiv" accept=".xls,.xlsx" class="so-leitor"></label>
@@ -1905,12 +1990,32 @@ async function telaAdmin() {
     <p class="dica">"Gera cancelamento": ao escolher a situação, o caso entra automaticamente na fila do relatório semanal à Recuperação de Ativos. "Confere vencimento": o sistema avisa para conferir o pagamento ${PRAZO_UTEIS} dias úteis após o vencimento do boleto. "Novo acordo": situação de novo parcelamento efetivado — libera os campos valor total e nº do novo parcelamento (use com a categoria "Pago"). "Confere efetivação": a partir do dia seguinte, o sistema avisa para conferir se o parcelamento foi efetivado.</p></div>
   <div class="card"><h2>Setores</h2><div class="tabela-wrap"><table><thead><tr><th>Setor</th><th class="num">Ordem</th><th>Ativo</th><th></th></tr></thead><tbody id="tbSet"></tbody></table></div>
     <form class="linha" id="fNovoSet" style="margin-top:.8rem"><label class="campo">Novo setor<input name="nome" maxlength="40" required></label><button class="btn prim">Adicionar</button></form></div>
-  <details class="card" id="cardCwmkt"><summary><h2 style="display:inline">Ligação com o CWMKT (WhatsApp)</h2> <span class="dica">reconhece quem veio das campanhas e passa a conversa ao cobrador</span></summary>
-    <p class="dica" style="margin-top:.6rem">Confere se a chave do CWMKT está cadastrada, se o time e os cobradores foram encontrados e mostra os últimos avisos recebidos.</p>
+  <details class="card" id="cardCwmkt"><summary><h2 style="display:inline">Ligação com o CWMKT (WhatsApp)</h2> <span class="dica">conta os atendimentos que começam pelos botões da campanha e pela cobrança manual</span></summary>
+    <h3 style="margin-top:.8rem">Frases que abrem um atendimento</h3>
+    <p class="dica">Quando a <b>primeira mensagem do contribuinte</b> começa por uma frase marcada "Contribuinte" (o botão que ele apertou), ou quando o <b>atendente</b> envia uma mensagem que começa por uma frase marcada "Atendente", a conversa entra em Relatórios → Campanhas, na coluna indicada, para o 1º atendente atribuído. Maiúsculas, acentos e pontuação não importam. As conversas dos botões do contribuinte recebem a etiqueta "campanha" no CWMKT.</p>
+    <div class="tabela-wrap"><table><thead><tr><th>Começa com</th><th>Coluna no relatório</th><th>Quem envia</th><th>Ativa</th><th></th></tr></thead><tbody id="tbFrases"><tr><td colspan="5" class="vazio">Carregando…</td></tr></tbody></table></div>
+    <form id="fFrase" class="linha" style="margin-top:.5rem">
+      <label class="campo" style="flex:2">Nova frase<input name="frase" required maxlength="200" placeholder="Quero Parcelar!"></label>
+      <label class="campo">Coluna<input name="gatilho" required maxlength="40" list="listaGat" placeholder="Quero parcelar"></label><datalist id="listaGat"></datalist>
+      <label class="campo">Quem envia<select name="quem"><option value="contribuinte">Contribuinte</option><option value="atendente">Atendente</option></select></label>
+      <button class="btn" type="submit">Incluir</button></form>
+    <h3 style="margin-top:1.2rem">Trazer conversas anteriores</h3>
+    <p class="dica">Procura no CWMKT as conversas que começaram a partir da data escolhida e inclui no relatório as que abriram por uma das frases acima (sem repetir as que já estão lá). Pode levar alguns minutos: deixe esta página aberta.</p>
+    <div class="linha"><label class="campo">Desde<input type="date" id="impDesde" value="2026-10-30"></label><button class="btn" type="button" id="btnImpCwmkt">Trazer conversas</button></div><div id="resImp"></div>
+    <h3 style="margin-top:1.2rem">Conferência</h3>
+    <p class="dica">Confere se a chave do CWMKT está cadastrada e mostra os últimos avisos recebidos.</p>
     <button class="btn" type="button" id="btnTesteCwmkt">Testar ligação</button><div id="resCwmkt"></div></details>
   <div class="card"><h2>Auditoria (últimas 200 alterações)</h2><div class="tabela-wrap"><table><thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Tabela</th><th>Registro</th><th>Campos alterados</th></tr></thead><tbody id="tbAud"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody></table></div></div>`;
   await carregarTabelas();
   $('#btnTesteCwmkt').addEventListener('click', testarCwmkt);
+  $('#btnImpCwmkt').addEventListener('click', importarCwmkt);
+  carregarFrases();
+  $('#fFrase').addEventListener('submit', async e => {
+    e.preventDefault(); const f = e.target;
+    const { error } = await sb.from('atendimento_frases').insert({ frase: f.frase.value.trim(), gatilho: f.gatilho.value.trim(), quem: f.quem.value });
+    if (error) return toast(msgErro(error), true);
+    f.reset(); toast('Frase incluída.'); carregarFrases();
+  });
   // usuários
   const tbU = $('#tbUsu');
   const usus = [...S.perfis].sort((a, b) => (a.ativo - b.ativo) || a.nome.localeCompare(b.nome));
@@ -2002,6 +2107,54 @@ async function telaAdmin() {
   }).join('') || '<tr><td colspan="6" class="vazio">Nenhum registro.</td></tr>';
 }
 
+async function carregarFrases() {
+  const tb = $('#tbFrases'); if (!tb) return;
+  const { data, error } = await sb.from('atendimento_frases').select('*').order('quem').order('id');
+  if (error) { tb.innerHTML = `<tr><td colspan="5"><div class="aviso erro">${esc(msgErro(error))}</div></td></tr>`; return; }
+  $('#listaGat').innerHTML = [...new Set([...ORDEM_GATILHO, ...data.map(d => d.gatilho)])].map(g => `<option value="${esc(g)}">`).join('');
+  tb.innerHTML = data.map(d => `<tr data-id="${d.id}"><td><input name="frase" value="${esc(d.frase)}" maxlength="200" style="width:100%"></td>
+    <td><input name="gatilho" value="${esc(d.gatilho)}" maxlength="40" list="listaGat"></td>
+    <td><select name="quem"><option value="contribuinte"${d.quem === 'contribuinte' ? ' selected' : ''}>Contribuinte</option><option value="atendente"${d.quem === 'atendente' ? ' selected' : ''}>Atendente</option></select></td>
+    <td><input type="checkbox" name="ativo"${d.ativo ? ' checked' : ''} aria-label="Ativa"></td>
+    <td><button class="btn peq" data-salvar>Salvar</button> <button class="btn peq" data-excluir>Excluir</button></td></tr>`).join('') || '<tr><td colspan="5" class="vazio">Nenhuma frase cadastrada: nenhum atendimento será contado.</td></tr>';
+  $$('tr[data-id]', tb).forEach(tr => {
+    const id = tr.dataset.id, q = n => tr.querySelector(`[name="${n}"]`);
+    tr.querySelector('[data-salvar]').addEventListener('click', async () => {
+      const { error } = await sb.from('atendimento_frases').update({ frase: q('frase').value.trim(), gatilho: q('gatilho').value.trim(), quem: q('quem').value, ativo: q('ativo').checked }).eq('id', id);
+      if (error) return toast(msgErro(error), true); toast('Frase salva.'); carregarFrases();
+    });
+    tr.querySelector('[data-excluir]').addEventListener('click', async () => {
+      if (!confirm('Excluir esta frase? Os atendimentos já contados continuam no relatório.')) return;
+      const { error } = await sb.from('atendimento_frases').delete().eq('id', id);
+      if (error) return toast(msgErro(error), true); toast('Frase excluída.'); carregarFrases();
+    });
+  });
+}
+
+// Traz as conversas anteriores do CWMKT: lista as conversas criadas desde a data e manda em lotes para a função cwmkt.
+async function importarCwmkt() {
+  const box = $('#resImp'), btn = $('#btnImpCwmkt'), desde = $('#impDesde').value;
+  if (!desde) return toast('Escolha a data.', true);
+  btn.disabled = true; box.innerHTML = '<p class="carregando">Listando as conversas no CWMKT…</p>';
+  const chamar = async q => {
+    const { data: { session } } = await sb.auth.getSession();
+    const r = await fetch(`${CFG.SUPABASE_URL}/functions/v1/cwmkt?acao=importar&${q}`, { method: 'POST', headers: { Authorization: `Bearer ${session.access_token}`, apikey: CFG.SUPABASE_KEY, 'Content-Type': 'application/json' }, body: '{}' });
+    const d = await r.json(); if (!r.ok || d.erro) throw new Error(d.erro || 'O CWMKT não respondeu.'); return d;
+  };
+  try {
+    const ids = []; let pg = 1;
+    while (pg) { const d = await chamar(`etapa=lista&desde=${desde}&pg=${pg}`); ids.push(...d.ids); pg = d.proxima; }
+    const tot = { novos: 0, ja: 0, outros: 0, erros: 0 };
+    for (let i = 0; i < ids.length; i += 20) {
+      box.innerHTML = `<p class="carregando">Conferindo ${NUM.format(Math.min(i + 20, ids.length))} de ${NUM.format(ids.length)} conversas…</p>`;
+      const d = await chamar(`etapa=conversas&ids=${ids.slice(i, i + 20).join(',')}`);
+      for (const k of Object.keys(tot)) tot[k] += d[k] || 0;
+    }
+    box.innerHTML = `<div class="aviso ok">${NUM.format(ids.length)} conversas conferidas: <b>${NUM.format(tot.novos)}</b> atendimento(s) incluído(s) no relatório, ${NUM.format(tot.ja)} já estavam lá e ${NUM.format(tot.outros)} começaram de outro jeito.${tot.erros ? ` ${NUM.format(tot.erros)} não puderam ser lidas (tente de novo mais tarde).` : ''}</div>`;
+  } catch (e) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(e))}</div>`; }
+  btn.disabled = false;
+}
+
 async function testarCwmkt() {
   const box = $('#resCwmkt'); box.innerHTML = '<p class="carregando">Testando…</p>';
   try {
@@ -2014,18 +2167,15 @@ async function testarCwmkt() {
     box.innerHTML = `<ul class="checks" style="margin-top:.8rem">
       ${d.falta.length ? ok(false, `Falta cadastrar no Supabase (Edge Functions → Secrets): ${d.falta.map(f => `<b>${f}</b> (${NOMES[f] || f})`).join(', ')}.`) : ok(true, 'Configuração cadastrada.')}
       ${d.erro_api ? ok(false, `O CWMKT recusou a consulta: ${esc(d.erro_api)}. Confira o endereço, o número da conta e a chave.`) : ''}
-      ${!d.falta.length && !d.erro_api ? ok(!!d.time, d.time ? `Time "<b>${esc(d.time.nome)}</b>" encontrado.` : `Time "${esc(d.time_nome)}" não encontrado. Times existentes: ${esc((d.times || []).join(', '))}.`) : ''}
-      ${!d.falta.length && !d.erro_api ? ok(!d.times_aceitos.length || d.times_aceitos_encontrados.length > 0, d.times_aceitos.length ? `Times do bot que também vão para o cobrador: ${d.times_aceitos_encontrados.length ? d.times_aceitos_encontrados.map(t => `<b>${esc(t)}</b>`).join(', ') : 'nenhum encontrado'} (configurado: ${esc(d.times_aceitos.join('; '))}).` : 'Nenhum time do bot configurado como de cobrança (CWMKT_TIMES_ACEITOS): conversas enviadas pelo bot a outros times só recebem a etiqueta "campanha".') : ''}
-      ${!d.falta.length && !d.erro_api && (d.times || []).length ? `<li><span class="m fo">–</span><span>Times que existem no CWMKT: ${d.times.map(t => esc(t)).join(' · ')}</span></li>` : ''}
-      ${!d.falta.length && !d.erro_api ? ok(true, d.tem_etiqueta_campanha ? 'Etiqueta "campanha" já existe.' : 'A etiqueta "campanha" será criada no primeiro retorno.') : ''}
+      ${!d.falta.length && !d.erro_api ? ok(true, d.tem_etiqueta_campanha ? 'Etiqueta "campanha" já existe no CWMKT.' : 'A etiqueta "campanha" será criada no primeiro atendimento de campanha.') : ''}
+      ${ok(d.frases > 0, d.frases ? `${NUM.format(d.frases)} frase(s) ativa(s) para reconhecer o início do atendimento.` : 'Nenhuma frase ativa: nenhum atendimento será contado.')}
+      ${!d.falta.length && !d.erro_api ? `<li><span class="m fo">–</span><span>Agentes no CWMKT: ${NUM.format(d.agentes || 0)} · atendimentos já contados: ${NUM.format(d.atendimentos || 0)}</span></li>` : ''}
     </ul>
-    ${d.cobradores.length ? `<div class="tabela-wrap"><table><thead><tr><th>Cobrador no sistema</th><th>Agente no CWMKT</th><th>Etiqueta</th></tr></thead><tbody>${d.cobradores.map(c => `<tr><td>${esc(c.nome)}</td><td>${c.agente ? esc(c.agente) : '<span class="tag Revogado">não encontrado</span>'}</td><td>${c.etiqueta ? esc(c.etiqueta) : '<span class="dica">não encontrada</span>'}</td></tr>`).join('')}</tbody></table></div>
-      <p class="dica">O agente é encontrado pelo e-mail ou pelo nome; a etiqueta, pelo padrão "cobranças_nome".</p>` : ''}
     <h3 style="margin-top:1rem">Endereço do webhook (colar no CWMKT)</h3>
     <div class="linha"><input type="text" id="urlWebhook" readonly value="${esc(d.webhook)}" style="flex:1;min-width:0"><button class="btn" type="button" id="copiarWebhook">Copiar</button></div>
     <p class="dica">No CWMKT: Configurações → Integrações → Webhooks → Adicionar. Marque os eventos <b>Mensagem criada</b>, <b>Status da conversa alterado</b> e <b>Conversa atualizada</b>. Não compartilhe este endereço: ele funciona como senha.</p>
     <h3 style="margin-top:1rem">Últimos avisos recebidos</h3>
-    ${d.eventos.length ? `<div class="tabela-wrap"><table><thead><tr><th>Quando</th><th>Aviso</th><th class="num">Conversa</th><th>Resultado</th></tr></thead><tbody>${d.eventos.map(e => `<tr><td>${new Date(e.recebido).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</td><td>${esc(e.evento)}</td><td class="num">${e.conversa ?? ''}</td><td>${esc(e.resultado)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="dica">Nenhum aviso de campanha recebido ainda.</p>'}`;
+    ${d.eventos.length ? `<div class="tabela-wrap"><table><thead><tr><th>Quando</th><th>Aviso</th><th class="num">Conversa</th><th>Resultado</th></tr></thead><tbody>${d.eventos.map(e => `<tr><td>${new Date(e.recebido).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</td><td>${esc(e.evento)}</td><td class="num">${e.conversa ?? ''}</td><td>${esc(e.resultado)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="dica">Nenhum aviso recebido ainda.</p>'}`;
     $('#copiarWebhook').addEventListener('click', async () => {
       const i = $('#urlWebhook');
       try { await navigator.clipboard.writeText(i.value); toast('Endereço copiado.'); } catch (_) { i.select(); toast('Selecionado: use Ctrl+C.'); }
