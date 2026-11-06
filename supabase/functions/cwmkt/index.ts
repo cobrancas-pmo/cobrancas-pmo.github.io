@@ -289,10 +289,68 @@ async function teste(req: Request, url: URL) {
   return json(out, 200, cors);
 }
 
+// ---------- Levantamento (temporário): como começam as conversas desde uma data ----------
+// Só o administrador logado no sistema. Não grava nada: só lê o CWMKT.
+// Devolve textos curtos, com números trocados por "#" (sem CPF/telefone), para achar o padrão de início.
+const mascara = (s: unknown, n: number) => String(s ?? '').replace(/\d{3,}/g, '#').replace(/\s+/g, ' ').trim().slice(0, n);
+async function levantamento(req: Request, url: URL) {
+  const perfil = await usuario(req);
+  if (!perfil) return json({ erro: 'Faça login no sistema.' }, 401, cors);
+  if (perfil.papel !== 'admin') return json({ erro: 'Somente o administrador.' }, 403, cors);
+  cache = {};
+  const etapa = url.searchParams.get('etapa') || 'lista';
+  if (etapa === 'lista') {
+    const desde = url.searchParams.get('desde') || '2026-10-29';
+    const pg = Number(url.searchParams.get('pg')) || 1, n = Math.min(Number(url.searchParams.get('n')) || 10, 40);
+    const out: any[] = []; let modo = 'filtro', erro = null, ultimaPg = pg;
+    const corpo = { payload: [{ attribute_key: 'created_at', filter_operator: 'is_greater_than', values: [desde], query_operator: null }] };
+    try {
+      for (let p = pg; p < pg + n; p++) {
+        const r = await api(`/conversations/filter?page=${p}`, { method: 'POST', body: JSON.stringify(corpo) });
+        const itens = lista(r?.payload ? r : r?.data); ultimaPg = p;
+        out.push(...itens);
+        if (itens.length < 25) { ultimaPg = -1; break; }
+      }
+    } catch (e) { erro = String((e as Error).message || e); modo = 'falhou'; }
+    const conversas = out.map((c: any) => ({ id: c.id, criada: c.created_at, status: c.status, caixa: c.inbox_id, time: c?.meta?.team?.name || null,
+      agente: c?.meta?.assignee?.name || null, etiquetas: c.labels || [] }));
+    return json({ modo, erro, proxima: ultimaPg === -1 ? null : ultimaPg + 1, total: conversas.length, conversas }, 200, cors);
+  }
+  // etapa msgs: resumo do início de cada conversa
+  const ids = (url.searchParams.get('ids') || '').split(',').map(Number).filter(Boolean).slice(0, 60);
+  const res: any[] = [];
+  for (const id of ids) {
+    try {
+      let msgs: any[] = []; let antes = '';
+      for (let i = 0; i < 8; i++) {
+        const r = await api(`/conversations/${id}/messages${antes}`);
+        const p = lista(r);
+        msgs = [...p, ...msgs];
+        if (p.length < 20) break;
+        antes = `?before=${Math.min(...p.map((m: any) => Number(m.id)))}`;
+      }
+      msgs.sort((a, b) => Number(a.id) - Number(b.id));
+      const pub = msgs.filter(m => !m.private);
+      const tipoTxt = (m: any) => ({ 0: 'E', 1: 'S', 2: 'A', 3: 'T' } as any)[Number(m.message_type)] ?? String(m.message_type);
+      const quem = (m: any) => m?.sender?.type || m?.sender_type || '-';
+      const ent = pub.find(m => Number(m.message_type) === 0);
+      const hum = pub.find(m => (Number(m.message_type) === 1 || Number(m.message_type) === 3) && /user/i.test(quem(m)));
+      const atrib = msgs.filter(m => Number(m.message_type) === 2 && /atribu|assign/i.test(String(m.content || ''))).slice(0, 3).map(m => ({ em: m.created_at, txt: mascara(m.content, 140) }));
+      res.push({ id, n: msgs.length,
+        inicio: pub.slice(0, 8).map(m => `${tipoTxt(m)}|${quem(m)}|${m.content_type || ''}|${mascara(m.content, 90)}`),
+        primeira_entrada: ent ? { em: ent.created_at, txt: mascara(ent.content, 90), ct: ent.content_type || null, attrs: mascara(JSON.stringify(ent.content_attributes || {}), 160) } : null,
+        primeiro_humano: hum ? { em: hum.created_at, nome: hum.sender?.name || null, id: hum.sender?.id || null } : null,
+        atribuicoes: atrib });
+    } catch (e) { res.push({ id, erro: String((e as Error).message || e).slice(0, 120) }); }
+  }
+  return json({ res }, 200, cors);
+}
+
 Deno.serve(async req => {
   const url = new URL(req.url);
   if (req.method === 'OPTIONS') return new Response(null, { headers: cors });
   if (req.method !== 'POST') return json({ ok: false }, 405);
+  if (url.searchParams.get('acao') === 'levantamento') return levantamento(req, url);
   if (url.searchParams.get('acao') === 'teste') return teste(req, url);
   if (url.searchParams.get('acao') === 'listar') return listar(req);
   return webhook(req, url);
