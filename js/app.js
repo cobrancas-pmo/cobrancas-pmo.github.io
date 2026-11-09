@@ -140,6 +140,7 @@ async function aposLogin(session) {
   $('#topo').hidden = false;
   $('#nomeUsuario').textContent = `${perfil.nome} · ${({ funcionario: 'Funcionário', supervisor: 'Supervisão', admin: 'Administrador' })[perfil.papel]}`;
   $('#menuAdmin').hidden = !ehAdmin();
+  $('#menuDividir').hidden = !ehSup();
   atualizarAvisoGlobal();
   resetInatividade();
   if (!location.hash || location.hash === '#/') location.hash = '#/lancar'; else rotear();
@@ -302,14 +303,46 @@ function parseHash() {
 function rotear() {
   if (!S.perfil || !S.perfil.ativo || S.recuperando) return;
   const { rota, params } = parseHash();
-  const rotaMenu = rota.startsWith('campanha') ? 'relatorios' : rota;
-  $$('#menu a').forEach(a => a.classList.toggle('ativo', a.dataset.rota === rotaMenu));
+  // endereços antigos (antes dos menus Cobrança manual / Cobrança automática, 09/11/2026)
+  if (rota === 'relatorios' && params.ver === 'campanhas') {
+    const q = new URLSearchParams(params); q.delete('ver'); const antigas = q.has('antigas'); q.delete('antigas');
+    location.replace('#/' + (antigas ? 'campanhas' : 'automatica') + (q.toString() ? '?' + q : '')); return;
+  }
+  fecharSubmenus();
+  $$('#menu a').forEach(a => a.classList.toggle('ativo', a.dataset.rota === rota));
+  $$('#menu .grupo').forEach(g => g.querySelector('.grupo-btn').classList.toggle('ativo', !!g.querySelector(`a[data-rota="${rota}"]`)));
   destruirGraficos();
-  const telas = { lancar: telaLancar, pendentes: telaPendentes, buscar: telaBuscar, relatorios: telaRelatorios, 'campanha-nova': telaCampanhaNova, 'campanha-dividir': telaCampanhaDividir, cancelamentos: telaCancelamentos, admin: telaAdmin, conta: telaConta };
+  const telas = { lancar: telaLancar, pendentes: telaPendentes, buscar: telaBuscar, relatorios: telaRelatorios, automatica: telaCampanhas, campanhas: telaCampanhasAntigas, 'campanha-nova': telaCampanhaNova, 'campanha-dividir': telaCampanhaDividir, cancelamentos: telaCancelamentos, admin: telaAdmin, conta: telaConta };
   (telas[rota] || telaLancar)(params);
   app().focus({ preventScroll: true });
 }
 window.addEventListener('hashchange', rotear);
+
+// ---------- menus com lista: Cobrança manual e Cobrança automática (09/11/2026)
+// A lista abre ao clicar no nome do menu e fecha ao escolher uma opção, clicar fora ou apertar Esc.
+// Fica "fixa" na tela, logo abaixo do botão, para não ser cortada no celular (onde o menu rola de lado).
+function fecharSubmenus(exceto) {
+  $$('#menu .grupo').forEach(g => { if (g === exceto) return; g.querySelector('.grupo-btn').setAttribute('aria-expanded', 'false'); g.querySelector('.submenu').hidden = true; });
+}
+function abrirSubmenu(g) {
+  const btn = g.querySelector('.grupo-btn'), sub = g.querySelector('.submenu');
+  fecharSubmenus(g);
+  const aberto = btn.getAttribute('aria-expanded') === 'true';
+  btn.setAttribute('aria-expanded', String(!aberto)); sub.hidden = aberto;
+  if (aberto) return;
+  const r = btn.getBoundingClientRect();
+  sub.style.top = Math.round(r.bottom + 4) + 'px';
+  sub.style.left = Math.round(Math.max(8, Math.min(r.left, innerWidth - sub.offsetWidth - 8))) + 'px';
+  (sub.querySelector('a.ativo') || sub.querySelector('a:not([hidden])'))?.focus({ preventScroll: true });
+}
+$$('#menu .grupo').forEach(g => {
+  g.querySelector('.grupo-btn').addEventListener('click', e => { e.stopPropagation(); abrirSubmenu(g); });
+  g.querySelector('.submenu').addEventListener('click', () => fecharSubmenus());
+});
+document.addEventListener('click', e => { if (!e.target.closest('#menu .grupo')) fecharSubmenus(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#menu .grupo-btn[aria-expanded="true"]')) { const b = $('#menu .grupo-btn[aria-expanded="true"]'); fecharSubmenus(); b.focus(); } });
+window.addEventListener('resize', () => fecharSubmenus());
+$('#menu').addEventListener('scroll', () => fecharSubmenus(), { passive: true });
 
 // ---------------------------------------------------------------- LANÇAR
 const optList = (lista, sel, vazio = '—') => `<option value="">${vazio}</option>` + lista.map(v => `<option ${v === sel ? 'selected' : ''}>${esc(v)}</option>`).join('');
@@ -826,12 +859,10 @@ function rotuloPeriodo(ini, fim) {
 }
 
 function telaRelatorios(params) {
-  if (params.ver === 'campanhas') return telaCampanhas(params);
   const [ya, ma] = hoje().split('-').map(Number);
   app().innerHTML = `
-  <div class="cab nao-imprimir"><div><h1>Relatórios</h1><p class="sub">Escolha o período${ehSup() ? ' e o funcionário' : ''}. Tudo é calculado na hora, a partir dos lançamentos.</p></div>
+  <div class="cab nao-imprimir"><div><h1>Relatório</h1><p class="sub">Cobrança manual · escolha o período${ehSup() ? ' e o funcionário' : ''}. Tudo é calculado na hora, a partir dos lançamentos.</p></div>
     <div class="acoes"><button class="btn" id="btnImprimir">Imprimir / salvar PDF</button><button class="btn" id="btnCsv">Baixar resumo (CSV)</button></div></div>
-  ${alternaRel('atendimentos')}
   <form class="card nao-imprimir" id="fRel"><div class="linha">
     <div class="campo"><span id="rotPer">Período</span><div class="periodo" role="group" aria-labelledby="rotPer">
       <span class="per-rot">De</span><button type="button" class="per-dt" data-q="ini" aria-haspopup="dialog">${ICO_CAL}<span></span></button>
@@ -1261,48 +1292,65 @@ function baixarPlanilha(wb, nome) {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 const lerComoBuffer = file => new Promise((ok, falha) => { const r = new FileReader(); r.onload = () => ok(new Uint8Array(r.result)); r.onerror = () => falha(r.error); r.readAsArrayBuffer(file); });
-const alternaRel = ver => `<div class="alterna nao-imprimir" role="tablist" aria-label="Tipo de relatório">
-  <a href="#/relatorios" role="tab" aria-selected="${ver !== 'campanhas'}" class="${ver !== 'campanhas' ? 'on' : ''}">Atendimentos</a>
-  <a href="#/relatorios?ver=campanhas" role="tab" aria-selected="${ver === 'campanhas'}" class="${ver === 'campanhas' ? 'on' : ''}">Campanhas</a></div>`;
 const primeiroNome = n => String(n || '').trim().split(/\s+/)[0] || 'Cobrador';
 const semAcento = s => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-// ---------- Relatórios → Campanhas: atendimentos no WhatsApp (desde 06/11/2026) ----------
-// O disparo em massa é feito por outro sistema; o contribuinte responde por um botão e a conversa nasce no CWMKT.
-// A função cwmkt grava cada conversa que começou por uma das frases (Administração → Frases dos atendimentos)
-// e o PRIMEIRO agente atribuído. Aqui só se conta: nada vai para o Lançar.
-const ORDEM_GATILHO = ['Pagar agora', 'Quero parcelar', 'Cobrança manual'];
-const ordGat = (a, b) => { const ia = ORDEM_GATILHO.indexOf(a), ib = ORDEM_GATILHO.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b); };
-async function telaCampanhas(params) {
-  if (params.antigas) return telaCampanhasAntigas(params);
+// ---------- Cobrança automática → Relatório do WhatsApp (desde 06/11/2026; detalhado desde 09/11/2026) ----------
+// O disparo em massa é feito por outro sistema; o contribuinte responde por um botão e a conversa cai no CWMKT.
+// A função cwmkt grava cada conversa que começou por uma das frases (Administração → Frases dos atendimentos),
+// uma vez por dia, com o PRIMEIRO agente atribuído. Os botões do contribuinte (qualquer frase marcada "Contribuinte")
+// aparecem juntos como "Campanha em massa"; as frases do atendente ("Prezado Contribuinte…") ficam com o nome delas.
+// Para comparar, a função também conta todas as conversas e mensagens do CWMKT por dia (relatorio_cwmkt), e a
+// supervisão informa quantas mensagens cada disparo enviou (tabela disparos) para calcular a taxa de resposta.
+const CAT_MASSA = 'Campanha em massa';
+const ORDEM_GATILHO = ['Pagar agora', 'Quero parcelar', 'Cobrança manual'];   // sugestões de coluna em Administração
+const ordCat = (a, b) => (a !== CAT_MASSA) - (b !== CAT_MASSA) || (a !== 'Cobrança manual') - (b !== 'Cobrança manual') || a.localeCompare(b);
+const fusoSP = { timeZone: 'America/Sao_Paulo' };
+const diaDe = t => new Date(t).toLocaleDateString('en-CA', fusoSP);
+const horaDe = t => Number(new Date(t).toLocaleString('en-GB', { ...fusoSP, hour: '2-digit', hourCycle: 'h23' }));
+const minutosEntre = (a, b) => (a && b) ? (new Date(b) - new Date(a)) / 60000 : null;
+const mediana = v => { const x = v.filter(n => n != null && n >= 0).sort((a, b) => a - b); if (!x.length) return null; const m = x.length >> 1; return x.length % 2 ? x[m] : (x[m - 1] + x[m]) / 2; };
+const fmtMin = m => m == null ? '—' : m < 1 ? 'menos de 1 min' : m < 60 ? `${Math.round(m)} min` : `${Math.floor(m / 60)} h ${pad(Math.round(m % 60))}`;
+const pct = (a, b) => b ? (100 * a / b).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%' : '—';
+function diasEntre(ini, fim) { const out = []; const d = new Date(ini + 'T12:00:00Z'), f = new Date(fim + 'T12:00:00Z'); while (d <= f && out.length < 400) { out.push(d.toISOString().slice(0, 10)); d.setUTCDate(d.getUTCDate() + 1); } return out; }
+const nomeAtWa = l => l.usuario_id ? (S.perfis.find(p => p.id === l.usuario_id)?.nome || l.agente_nome || 'Atendente') : (String(l.agente_nome || '').trim() || 'Sem atendente');
+
+async function telaCampanhas() {
   const [ya, ma] = hoje().split('-').map(Number);
   let ini = `${ya}-${pad(ma)}-01`, fim = `${ya}-${pad(ma)}-${pad(ultimoDia(ya, ma))}`;
   try { const a = localStorage.getItem('rel_ini'), b = localStorage.getItem('rel_fim'); if (/^\d{4}-\d\d-\d\d$/.test(a) && /^\d{4}-\d\d-\d\d$/.test(b) && a <= b) { ini = a; fim = b; } } catch (_) {}
   app().innerHTML = `
-  <div class="cab"><div><h1>Relatórios</h1><p class="sub">Atendimentos no WhatsApp que começaram pelos botões da campanha ou pela mensagem da cobrança manual, contados para o 1º atendente atribuído.</p></div></div>
-  ${alternaRel('campanhas')}
-  <form class="card" id="fAtWa"><div class="linha">
+  <div class="cab nao-imprimir"><div><h1>Relatório do WhatsApp</h1><p class="sub">Cobrança automática · quem respondeu à campanha em massa, quem atendeu e quanto isso representa de todo o atendimento no CWMKT.</p></div>
+    <div class="acoes"><button class="btn" type="button" id="btnImpWa">Imprimir / salvar PDF</button><button class="btn" type="button" id="btnCsvWa">Baixar (CSV)</button></div></div>
+  <form class="card nao-imprimir" id="fAtWa"><div class="linha">
     <label class="campo">De<input type="date" name="ini" value="${ini}" required></label>
     <label class="campo">a<input type="date" name="fim" value="${fim}" required></label>
     ${ehSup() ? '<label class="campo">Atendente<select name="ag"><option value="">Todos os atendentes</option></select></label>' : ''}
     <button class="btn prim" type="submit">Gerar</button></div></form>
-  <div id="relAtWa"><p class="carregando">Calculando…</p></div>
-  <p class="dica nao-imprimir"><a href="#/relatorios?ver=campanhas&antigas=1">Campanhas antigas de SMS/e-mail pela Assertiva</a></p>`;
-  const f = $('#fAtWa'); let linhas = [];
-  const desenhar = () => desenharAtendimentosWa($('#relAtWa'), linhas, f.ini.value, f.fim.value, f.ag ? f.ag.value : '');
+  <div id="relAtWa"><p class="carregando">Calculando…</p></div>`;
+  const f = $('#fAtWa');
+  const ctx = { linhas: [], cwmkt: [], disparos: [], massa: new Set(['Pagar agora', 'Quero parcelar']) };
+  const desenhar = () => desenharAtendimentosWa($('#relAtWa'), ctx, f.ini.value, f.fim.value, f.ag ? f.ag.value : '', gerar);
   const gerar = async () => {
     if (!f.ini.value || !f.fim.value || f.ini.value > f.fim.value) return toast('Período inválido.', true);
     try { localStorage.setItem('rel_ini', f.ini.value); localStorage.setItem('rel_fim', f.fim.value); } catch (_) {}
     const box = $('#relAtWa'); box.innerHTML = '<p class="carregando">Calculando…</p>';
     const d = new Date(f.fim.value + 'T12:00:00'); d.setDate(d.getDate() + 1);
     const ate = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T00:00:00-03:00`;
-    linhas = [];
+    const linhas = [];
     for (let de = 0; ; de += 1000) {
       const { data, error } = await sb.from('atendimentos_wa').select('conversa,gatilho,iniciada_em,agente_nome,usuario_id,atribuido_em,link')
         .gte('iniciada_em', f.ini.value + 'T00:00:00-03:00').lt('iniciada_em', ate).order('iniciada_em').range(de, de + 999);
       if (error) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(error))}</div>`; return; }
       linhas.push(...data); if (data.length < 1000) break;
     }
+    const [fr, cw, dp] = await Promise.all([
+      sb.from('atendimento_frases').select('gatilho,quem'),
+      sb.rpc('relatorio_cwmkt', { p_ini: f.ini.value, p_fim: f.fim.value }),
+      sb.from('disparos').select('id,data,quantidade,observacao,criado_por').gte('data', f.ini.value).lte('data', f.fim.value).order('data')]);
+    for (const r of [cw, dp]) if (r.error) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(r.error))}</div>`; return; }
+    for (const x of fr.data || []) if (x.quem === 'contribuinte') ctx.massa.add(x.gatilho);
+    Object.assign(ctx, { linhas, cwmkt: cw.data || [], disparos: dp.data || [] });
     if (f.ag) {
       const atual = f.ag.value, nomes = [...new Set(linhas.map(nomeAtWa))].sort((a, b) => a.localeCompare(b));
       f.ag.innerHTML = '<option value="">Todos os atendentes</option>' + nomes.map(n => `<option${n === atual ? ' selected' : ''}>${esc(n)}</option>`).join('');
@@ -1311,56 +1359,160 @@ async function telaCampanhas(params) {
   };
   f.addEventListener('submit', e => { e.preventDefault(); gerar(); });
   if (f.ag) f.ag.addEventListener('change', desenhar);
+  $('#btnImpWa').addEventListener('click', () => { $$('#relAtWa details').forEach(x => { x.open = true; }); window.print(); });
+  $('#btnCsvWa').addEventListener('click', () => csvAtendimentosWa(ctx, f.ini.value, f.fim.value, f.ag ? f.ag.value : ''));
   gerar();
 }
-const nomeAtWa = l => l.usuario_id ? (S.perfis.find(p => p.id === l.usuario_id)?.nome || l.agente_nome || 'Atendente') : (String(l.agente_nome || '').trim() || 'Sem atendente');
-function desenharAtendimentosWa(box, todas, ini, fim, ag) {
-  const L = ag ? todas.filter(l => nomeAtWa(l) === ag) : todas;
+
+function resumoAtWa(ctx, ini, fim, ag) {
+  const cat = l => ctx.massa.has(l.gatilho) ? CAT_MASSA : l.gatilho;
+  const L = (ag ? ctx.linhas.filter(l => nomeAtWa(l) === ag) : ctx.linhas).map(l => ({ ...l, cat: cat(l), dia: diaDe(l.iniciada_em), espera: minutosEntre(l.iniciada_em, l.atribuido_em) }));
+  const cats = [...new Set([CAT_MASSA, 'Cobrança manual', ...L.map(l => l.cat)])].sort(ordCat);
+  const dias = diasEntre(ini, fim).map(d => {
+    const Ld = L.filter(l => l.dia === d), c = ctx.cwmkt.find(x => x.dia === d) || {};
+    return { dia: d, enviadas: ctx.disparos.filter(x => x.data === d).reduce((s, x) => s + x.quantidade, 0),
+      massa: Ld.filter(l => l.cat === CAT_MASSA).length, outrasCat: Ld.filter(l => l.cat !== CAT_MASSA).length,
+      cwmkt: Number(c.atendimentos) || 0, recebidas: Number(c.recebidas) || 0 };
+  });
+  const tot = k => dias.reduce((s, d) => s + d[k], 0);
+  return { L, cats, dias, enviadas: tot('enviadas'), massa: L.filter(l => l.cat === CAT_MASSA).length,
+    cwmkt: tot('cwmkt'), recebidas: tot('recebidas'), temCwmkt: ctx.cwmkt.length > 0 };
+}
+
+function desenharAtendimentosWa(box, ctx, ini, fim, ag, recarregar) {
+  destruirGraficos();
+  const R = resumoAtWa(ctx, ini, fim, ag), L = R.L;
   const titulo = `${fmtData(ini)} a ${fmtData(fim)}`;
-  if (!L.length) { box.innerHTML = `<div class="card"><p class="vazio">Nenhum atendimento de campanha neste período.</p><p class="dica" style="text-align:center">Os atendimentos aparecem aqui quando o contribuinte aperta um botão da campanha no WhatsApp, ou quando a cobrança manual começa pela mensagem pronta.</p></div>`; return; }
-  const gats = [...new Set([...ORDEM_GATILHO, ...L.map(l => l.gatilho)])].sort(ordGat);
-  const conta = (arr, g) => arr.filter(l => l.gatilho === g).length;
+  const conta = (arr, c) => arr.filter(l => l.cat === c).length;
   const sem = L.filter(l => !String(l.agente_nome || '').trim());
+  const k = (rot, val, det = '', cls = '') => `<div class="kpi ${cls}"><div class="rot">${rot}</div><div class="val">${val}</div>${det ? `<div class="det">${det}</div>` : ''}</div>`;
   const grupos = new Map();
   for (const l of L) { const n = String(l.agente_nome || '').trim() ? nomeAtWa(l) : ''; if (!grupos.has(n)) grupos.set(n, []); grupos.get(n).push(l); }
   const ordem = [...grupos.keys()].sort((a, b) => (a === '') - (b === '') || grupos.get(b).length - grupos.get(a).length || a.localeCompare(b));
-  const k = (rot, val, det = '', cls = '') => `<div class="kpi ${cls}"><div class="rot">${rot}</div><div class="val">${val}</div>${det ? `<div class="det">${det}</div>` : ''}</div>`;
+  const dh = t => t ? new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
+  const linkConv = l => l.link ? `<a class="btn peq" href="${esc(l.link)}" target="_blank" rel="noopener">CWMKT #${l.conversa}</a>` : '#' + l.conversa;
+  const podeDisp = ehSup();
+  const outrosCats = R.cats.filter(c => c !== CAT_MASSA);
   box.innerHTML = `
-  <h2 class="tit-rel">Atendimentos de campanha no WhatsApp · ${titulo}${ag ? ' · ' + esc(ag) : ''}</h2>
+  <h2 class="tit-rel">Cobrança automática no WhatsApp · ${titulo}${ag ? ' · ' + esc(ag) : ''}</h2>
+  <h3 class="sub-rel">Eficiência da campanha em massa</h3>
   <div class="kpis">
-    ${k('Total', NUM.format(L.length), '', 'destaque')}
-    ${gats.map(g => k(esc(g), NUM.format(conta(L, g)))).join('')}
+    ${k('Mensagens enviadas', R.enviadas ? NUM.format(R.enviadas) : '—', R.enviadas ? 'informadas nos disparos' : 'informe no quadro abaixo')}
+    ${k(CAT_MASSA, NUM.format(R.massa), 'responderam pelo botão', 'destaque')}
+    ${k('Taxa de resposta', pct(R.massa, R.enviadas), R.enviadas ? `${NUM.format(R.massa)} de ${NUM.format(R.enviadas)}` : 'precisa das mensagens enviadas')}
+    ${outrosCats.map(c => k(esc(c), NUM.format(conta(L, c)), c === 'Cobrança manual' ? '"Prezado Contribuinte…"' : '')).join('')}
     ${k('Sem atendente', NUM.format(sem.length), 'ninguém pegou a conversa')}
+    ${k('Até atender', fmtMin(mediana(L.map(l => l.espera))), 'tempo típico (mediana)')}
   </div>
-  <div class="card"><div class="tabela-wrap"><table>
-    <thead><tr><th>Atendente (1º atribuído)</th>${gats.map(g => `<th class="num">${esc(g)}</th>`).join('')}<th class="num">Total</th><th></th></tr></thead>
+  <h3 class="sub-rel">Comparação com todo o CWMKT</h3>
+  <div class="kpis">
+    ${k('Atendimentos no CWMKT', R.temCwmkt ? NUM.format(R.cwmkt) : '—', 'conversas com contribuinte, 1 por dia')}
+    ${k('Vieram da campanha', R.temCwmkt ? pct(R.massa, R.cwmkt) : '—', R.temCwmkt ? `${NUM.format(R.massa)} de ${NUM.format(R.cwmkt)}` : '')}
+    ${k('Mensagens recebidas', R.temCwmkt ? NUM.format(R.recebidas) : '—', 'dos contribuintes, campanha ou não')}
+  </div>
+  ${R.temCwmkt ? '' : '<p class="dica">Ainda não há contagem do CWMKT para este período. Ela começa a valer a partir de 09/11/2026; para dias anteriores, use Administração → Ligação com o CWMKT → Trazer conversas.</p>'}
+  ${ag ? '<p class="dica">Mensagens enviadas, taxa de resposta e totais do CWMKT são da equipe toda; o filtro de atendente vale para os atendimentos de campanha.</p>' : ''}
+  <div class="grade-2">
+    <div class="card"><h3>Por dia</h3><div class="grafico"><canvas id="gWaDia"></canvas></div></div>
+    <div class="card"><h3>Por hora do dia <span class="dica">(campanha em massa)</span></h3><div class="grafico"><canvas id="gWaHora"></canvas></div></div>
+  </div>
+  <div class="card"><h3>Dia a dia</h3><div class="tabela-wrap"><table>
+    <thead><tr><th>Dia</th><th class="num">Enviadas</th><th class="num">${CAT_MASSA}</th><th class="num">Taxa</th>${outrosCats.map(c => `<th class="num">${esc(c)}</th>`).join('')}<th class="num">Atend. CWMKT</th><th class="num">Da campanha</th><th class="num">Msg. recebidas</th></tr></thead>
+    <tbody>${R.dias.filter(d => d.enviadas || d.massa || d.outrasCat || d.cwmkt).map(d => { const Ld = L.filter(l => l.dia === d.dia);
+      return `<tr><td>${fmtData(d.dia)}</td><td class="num">${d.enviadas ? NUM.format(d.enviadas) : '—'}</td><td class="num"><strong>${NUM.format(d.massa)}</strong></td><td class="num">${pct(d.massa, d.enviadas)}</td>
+        ${outrosCats.map(c => `<td class="num">${NUM.format(conta(Ld, c))}</td>`).join('')}<td class="num">${d.cwmkt ? NUM.format(d.cwmkt) : '—'}</td><td class="num">${pct(d.massa, d.cwmkt)}</td><td class="num">${d.recebidas ? NUM.format(d.recebidas) : '—'}</td></tr>`; }).join('') || `<tr><td colspan="${7 + outrosCats.length}" class="vazio">Nada neste período.</td></tr>`}
+      <tr class="total"><td>Total</td><td class="num">${R.enviadas ? NUM.format(R.enviadas) : '—'}</td><td class="num">${NUM.format(R.massa)}</td><td class="num">${pct(R.massa, R.enviadas)}</td>${outrosCats.map(c => `<td class="num">${NUM.format(conta(L, c))}</td>`).join('')}<td class="num">${R.temCwmkt ? NUM.format(R.cwmkt) : '—'}</td><td class="num">${pct(R.massa, R.cwmkt)}</td><td class="num">${R.temCwmkt ? NUM.format(R.recebidas) : '—'}</td></tr></tbody></table></div>
+    <p class="dica">A taxa de resposta compara, em cada dia, quem apertou o botão com as mensagens enviadas informadas para aquele dia. Respostas que chegam no dia seguinte ao disparo contam no dia em que chegaram.</p></div>
+  <div class="card"><h3>Por atendente <span class="dica">(1º atribuído)</span></h3><div class="tabela-wrap"><table>
+    <thead><tr><th>Atendente</th>${R.cats.map(c => `<th class="num">${esc(c)}</th>`).join('')}<th class="num">Total</th><th class="num">Até atender</th><th></th></tr></thead>
     <tbody>${ordem.map((n, i) => { const G = grupos.get(n); const login = G.some(l => l.usuario_id);
       return `<tr><td>${n ? esc(n) + (login ? '' : ' <span class="tag Sem-situacao" title="Atendente do CWMKT sem acesso ao sistema">sem login</span>') : '<span class="dica">Sem atendente</span>'}</td>
-        ${gats.map(g => `<td class="num">${NUM.format(conta(G, g))}</td>`).join('')}<td class="num"><strong>${NUM.format(G.length)}</strong></td>
+        ${R.cats.map(c => `<td class="num">${NUM.format(conta(G, c))}</td>`).join('')}<td class="num"><strong>${NUM.format(G.length)}</strong></td><td class="num">${n ? fmtMin(mediana(G.map(l => l.espera))) : '—'}</td>
         <td><button class="btn peq nao-imprimir" type="button" data-conv="${i}">Ver conversas</button></td></tr>
-        <tr class="casos" id="conv-${i}" hidden><td colspan="${gats.length + 3}"></td></tr>`; }).join('')}
-      <tr class="total"><td>Total</td>${gats.map(g => `<td class="num">${NUM.format(conta(L, g))}</td>`).join('')}<td class="num">${NUM.format(L.length)}</td><td></td></tr></tbody></table></div>
-    <p class="dica">Conta cada conversa uma vez por dia (o CWMKT reaproveita a conversa antiga do contribuinte), na data do clique ou da 1ª mensagem, para o primeiro atendente atribuído a ela no CWMKT (mesmo que depois passe para outro). "Sem login" = atendente do CWMKT que não tem acesso ao sistema. ${ehSup() ? 'Supervisão e administração veem toda a equipe.' : 'Você vê só os seus atendimentos.'}</p></div>`;
+        <tr class="casos" id="conv-${i}" hidden><td colspan="${R.cats.length + 4}"></td></tr>`; }).join('') || `<tr><td colspan="${R.cats.length + 4}" class="vazio">Nenhum atendimento de campanha neste período.</td></tr>`}
+      <tr class="total"><td>Total</td>${R.cats.map(c => `<td class="num">${NUM.format(conta(L, c))}</td>`).join('')}<td class="num">${NUM.format(L.length)}</td><td class="num">${fmtMin(mediana(L.map(l => l.espera)))}</td><td></td></tr></tbody></table></div>
+    <p class="dica">Cada conversa conta uma vez por dia (o CWMKT reaproveita a conversa antiga do contribuinte), para o primeiro atendente atribuído a ela, mesmo que depois passe para outro. "Até atender" = tempo entre a resposta do contribuinte e a atribuição. "Sem login" = atendente do CWMKT sem acesso ao sistema. ${ehSup() ? 'Supervisão e administração veem toda a equipe.' : 'Você vê só os seus atendimentos.'}</p></div>
+  <div class="card"><h3>Mensagens enviadas nos disparos</h3>
+    ${podeDisp ? `<form class="linha nao-imprimir" id="fDisp">
+      <label class="campo">Data<input type="date" name="data" value="${hoje() <= fim && hoje() >= ini ? hoje() : fim}" required></label>
+      <label class="campo">Quantidade<input type="number" name="qtd" min="1" max="10000000" step="1" inputmode="numeric" required></label>
+      <label class="campo" style="flex:2">Observação (opcional)<input name="obs" maxlength="120" placeholder="refis_2026_3"></label>
+      <button class="btn prim" type="submit">Incluir</button></form>` : '<p class="dica">A supervisão e a administração informam aqui quantas mensagens cada disparo enviou.</p>'}
+    <div class="tabela-wrap"><table><thead><tr><th>Data</th><th class="num">Mensagens enviadas</th><th>Observação</th><th>Informado por</th>${podeDisp ? '<th class="nao-imprimir"></th>' : ''}</tr></thead>
+      <tbody>${ctx.disparos.map(x => `<tr><td>${fmtData(x.data)}</td><td class="num">${NUM.format(x.quantidade)}</td><td>${esc(x.observacao || '')}</td><td>${esc(S.perfis.find(p => p.id === x.criado_por)?.nome || '—')}</td>${podeDisp ? `<td class="nao-imprimir"><button class="btn peq" type="button" data-del-disp="${x.id}">Excluir</button></td>` : ''}</tr>`).join('') || `<tr><td colspan="${podeDisp ? 5 : 4}" class="vazio">Nenhum disparo informado neste período.</td></tr>`}</tbody></table></div></div>
+  <details class="card"><summary><strong>Lista de todas as conversas (${NUM.format(L.length)})</strong></summary>
+    <div class="tabela-wrap"><table><thead><tr><th>Começou</th><th>Como começou</th><th>Atendente</th><th class="num">Até atender</th><th>Conversa</th></tr></thead>
+      <tbody>${L.map(l => `<tr><td>${dh(l.iniciada_em)}</td><td>${esc(l.cat)}${l.cat === CAT_MASSA ? ` <span class="dica">(${esc(l.gatilho)})</span>` : ''}</td><td>${String(l.agente_nome || '').trim() ? esc(nomeAtWa(l)) : '<span class="dica">Sem atendente</span>'}</td><td class="num">${fmtMin(l.espera)}</td><td>${linkConv(l)}</td></tr>`).join('') || '<tr><td colspan="5" class="vazio">Nenhuma conversa.</td></tr>'}</tbody></table></div></details>`;
+
   $$('[data-conv]', box).forEach(b => b.addEventListener('click', () => {
     const tr = $('#conv-' + b.dataset.conv); if (!tr.hidden) { tr.hidden = true; b.textContent = 'Ver conversas'; return; }
     tr.hidden = false; b.textContent = 'Fechar';
     const G = grupos.get(ordem[Number(b.dataset.conv)]);
-    const dh = t => t ? new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
     tr.firstElementChild.innerHTML = `<div class="tabela-wrap"><table><thead><tr><th>Começou</th><th>Como começou</th><th>Atribuída em</th><th>Conversa</th></tr></thead><tbody>${G.map(l =>
-      `<tr><td>${dh(l.iniciada_em)}</td><td>${esc(l.gatilho)}</td><td>${dh(l.atribuido_em)}</td><td>${l.link ? `<a class="btn peq" href="${esc(l.link)}" target="_blank" rel="noopener">Abrir no CWMKT #${l.conversa}</a>` : '#' + l.conversa}</td></tr>`).join('')}</tbody></table></div>`;
+      `<tr><td>${dh(l.iniciada_em)}</td><td>${esc(l.cat)}${l.cat === CAT_MASSA ? ` <span class="dica">(${esc(l.gatilho)})</span>` : ''}</td><td>${dh(l.atribuido_em)}</td><td>${linkConv(l)}</td></tr>`).join('')}</tbody></table></div>`;
   }));
+  const fd = $('#fDisp', box);
+  if (fd) fd.addEventListener('submit', async e => {
+    e.preventDefault();
+    const qtd = Number(fd.qtd.value);
+    if (!fd.data.value || !Number.isInteger(qtd) || qtd < 1) return toast('Informe a data e a quantidade de mensagens enviadas.', true);
+    const { error } = await sb.from('disparos').insert({ data: fd.data.value, quantidade: qtd, observacao: fd.obs.value.trim() || null, criado_por: S.user.id });
+    if (error) return toast(msgErro(error), true);
+    toast('Disparo incluído.'); recarregar();
+  });
+  $$('[data-del-disp]', box).forEach(b => b.addEventListener('click', async () => {
+    const x = ctx.disparos.find(d => String(d.id) === b.dataset.delDisp);
+    if (!x || !confirm(`Excluir o disparo de ${fmtData(x.data)} com ${NUM.format(x.quantidade)} mensagens?`)) return;
+    const { error } = await sb.from('disparos').delete().eq('id', x.id);
+    if (error) return toast(msgErro(error), true);
+    toast('Disparo excluído.'); recarregar();
+  }));
+
+  // ------- gráficos
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  Chart.defaults.color = css('--ink-2');
+  const eixos = { x: { stacked: true, grid: { display: false }, border: { color: css('--axis') }, ticks: { autoSkip: true, maxRotation: 0 } },
+    y: { stacked: true, beginAtZero: true, grid: { color: css('--grid') }, border: { display: false }, ticks: { precision: 0, callback: v => NUM.format(v) } } };
+  const barra = { borderRadius: 3, maxBarThickness: 28, categoryPercentage: .8, barPercentage: .9 };
+  const D = R.dias;
+  S.charts.push(new Chart($('#gWaDia'), { type: 'bar', data: { labels: D.map(d => fmtData(d.dia).slice(0, 5)), datasets: [
+    { label: CAT_MASSA, data: D.map(d => d.massa), backgroundColor: css('--s1'), ...barra },
+    { label: 'Cobrança manual e outras', data: D.map(d => d.outrasCat), backgroundColor: css('--s2'), ...barra },
+    ...(R.temCwmkt ? [{ label: 'Demais atendimentos do CWMKT', data: D.map(d => Math.max(0, d.cwmkt - d.massa - d.outrasCat)), backgroundColor: css('--axis'), ...barra }] : [])] },
+    options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } }, scales: eixos } }));
+  const horas = Array.from({ length: 24 }, (_, h) => h);
+  const porHora = horas.map(h => L.filter(l => l.cat === CAT_MASSA && horaDe(l.iniciada_em) === h).length);
+  const h0 = Math.min(7, ...horas.filter(h => porHora[h])), h1 = Math.max(19, ...horas.filter(h => porHora[h]));
+  S.charts.push(new Chart($('#gWaHora'), { type: 'bar', data: { labels: horas.slice(h0, h1 + 1).map(h => `${h}h`), datasets: [
+    { label: CAT_MASSA, data: porHora.slice(h0, h1 + 1), backgroundColor: css('--s1'), ...barra }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ...eixos.x, stacked: false }, y: { ...eixos.y, stacked: false } } } }));
 }
 
-// ---------- Relatórios → Campanhas antigas (SMS/e-mail pela Assertiva) ----------
+function csvAtendimentosWa(ctx, ini, fim, ag) {
+  if (!ctx.linhas.length && !ctx.cwmkt.length && !ctx.disparos.length) return toast('Gere o relatório primeiro.', true);
+  const R = resumoAtWa(ctx, ini, fim, ag);
+  const outrosCats = R.cats.filter(c => c !== CAT_MASSA);
+  const L = [['Cobrança automática no WhatsApp', `${fmtData(ini)} a ${fmtData(fim)}`, ag ? 'Atendente: ' + ag : 'Todos os atendentes'], [],
+    ['Dia', 'Mensagens enviadas', CAT_MASSA, 'Taxa de resposta', ...outrosCats, 'Atendimentos no CWMKT', 'Da campanha', 'Mensagens recebidas'],
+    ...R.dias.map(d => { const Ld = R.L.filter(l => l.dia === d.dia); return [fmtData(d.dia), d.enviadas || '', d.massa, pct(d.massa, d.enviadas), ...outrosCats.map(c => Ld.filter(l => l.cat === c).length), d.cwmkt || '', pct(d.massa, d.cwmkt), d.recebidas || '']; }),
+    ['Total', R.enviadas || '', R.massa, pct(R.massa, R.enviadas), ...outrosCats.map(c => R.L.filter(l => l.cat === c).length), R.cwmkt || '', pct(R.massa, R.cwmkt), R.recebidas || ''], [],
+    ['Começou', 'Como começou', 'Botão/frase', 'Atendente', 'Atribuída em', 'Minutos até atender', 'Conversa no CWMKT'],
+    ...R.L.map(l => [new Date(l.iniciada_em).toLocaleString('pt-BR'), l.cat, l.gatilho, String(l.agente_nome || '').trim() ? nomeAtWa(l) : 'Sem atendente',
+      l.atribuido_em ? new Date(l.atribuido_em).toLocaleString('pt-BR') : '', l.espera == null ? '' : Math.round(l.espera), l.link || '#' + l.conversa])];
+  const csv = '﻿' + L.map(r => r.map(c => { c = String(c ?? ''); return /[;"\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c; }).join(';')).join('\r\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `cobranca_automatica_whatsapp_${ini}_a_${fim}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------- Cobrança automática → Campanhas SMS/e-mail (Assertiva) ----------
 async function telaCampanhasAntigas(params) {
   const [ya, ma] = hoje().split('-').map(Number);
   let ini = `${ya}-${pad(ma)}-01`, fim = `${ya}-${pad(ma)}-${pad(ultimoDia(ya, ma))}`;
   try { const a = localStorage.getItem('rel_ini'), b = localStorage.getItem('rel_fim'); if (/^\d{4}-\d\d-\d\d$/.test(a) && /^\d{4}-\d\d-\d\d$/.test(b) && a <= b) { ini = a; fim = b; } } catch (_) {}
   app().innerHTML = `
-  <div class="cab"><div><h1>Relatórios</h1><p class="sub">Campanhas de SMS e e-mail pela Assertiva: quantos receberam, quantos responderam pelo WhatsApp e quantos pagaram.</p></div>
+  <div class="cab"><div><h1>Campanhas SMS/e-mail</h1><p class="sub">Cobrança automática · campanhas de SMS e e-mail pela Assertiva: quantos receberam, quantos responderam pelo WhatsApp e quantos pagaram.</p></div>
     <div class="acoes">${ehSup() ? '<a class="btn" href="#/campanha-dividir">Dividir lista do SMAR</a>' : ''}<a class="btn prim" href="#/campanha-nova">+ Nova campanha</a></div></div>
-  ${alternaRel('campanhas')}
-  <p class="dica nao-imprimir"><a href="#/relatorios?ver=campanhas">← Voltar aos atendimentos no WhatsApp</a></p>
   <form class="card" id="fCamp"><div class="linha">
     <label class="campo">Enviadas de<input type="date" name="ini" value="${ini}" required></label>
     <label class="campo">a<input type="date" name="fim" value="${fim}" required></label>
@@ -1439,7 +1591,7 @@ async function telaCampanhaNova() {
   const E = { arq: null, extra: null, nomeArq: '', nomeExtra: '', dados: null, grupos: [], ja: new Map(), outros: new Set(), resultado: null };
   app().innerHTML = `
   <div class="cab"><div><h1>Nova campanha</h1><p class="sub">Escolha os contribuintes de hoje e baixe a planilha no modelo da Assertiva. O caso entra no Lançar quando um agente cadastrado no sistema responder o contribuinte no WhatsApp.</p></div>
-    <div class="acoes"><a class="btn" href="#/relatorios?ver=campanhas&antigas=1">Voltar às campanhas</a></div></div>
+    <div class="acoes"><a class="btn" href="#/campanhas">Voltar às campanhas</a></div></div>
   <ol class="passos" id="passos"><li data-p="1" class="on"><span class="n">1</span>Arquivo</li><li data-p="2"><span class="n">2</span>Contribuintes de hoje</li><li data-p="3"><span class="n">3</span>Planilha da Assertiva</li></ol>
 
   <div class="card" data-passo="1">
@@ -1597,7 +1749,7 @@ async function telaCampanhaNova() {
       $('#acoes3').hidden = true; $('#aviso3').hidden = true;
       const fe = $('#feito3'); fe.hidden = false;
       fe.innerHTML = `<div class="aviso ok">Campanha <b>${esc(data.codigo)}</b> registrada com ${NUM.format(data.itens || 0)} parcelamento(s). A planilha foi baixada. Os casos entram no Lançar quando um agente cadastrado responder no WhatsApp.</div>
-        <div class="acoes"><button class="btn" type="button" id="baixarDeNovo">Baixar a planilha de novo</button><a class="btn" href="#/lancar">Ir para o Lançar</a><a class="btn prim" href="#/relatorios?ver=campanhas&antigas=1">Ver campanhas</a></div>`;
+        <div class="acoes"><button class="btn" type="button" id="baixarDeNovo">Baixar a planilha de novo</button><a class="btn" href="#/lancar">Ir para o Lançar</a><a class="btn prim" href="#/campanhas">Ver campanhas</a></div>`;
       $('#baixarDeNovo').addEventListener('click', () => baixarPlanilha(E.resultado.wb, E.resultado.nome));
       $$('#passos li').forEach(li => { li.classList.remove('on'); li.classList.add('feito'); li.querySelector('.n').textContent = '✓'; });
     } catch (e) {
@@ -1608,13 +1760,13 @@ async function telaCampanhaNova() {
 
 // ---------- Dividir a lista do SMAR (supervisão) ----------
 async function telaCampanhaDividir() {
-  if (!ehSup()) { location.hash = '#/relatorios?ver=campanhas&antigas=1'; return; }
+  if (!ehSup()) { location.hash = '#/campanhas'; return; }
   const C = window.Campanhas;
   const E = { arq: null, nome: '', grupos: [], partes: null };
   const ativos = S.perfis.filter(p => p.ativo);
   app().innerHTML = `
   <div class="cab"><div><h1>Dividir lista do SMAR</h1><p class="sub">Reparte o arquivo completo em listas de valor parecido, uma por cobrador. Contribuinte com vários parcelamentos fica inteiro com um cobrador só.</p></div>
-    <div class="acoes"><a class="btn" href="#/relatorios?ver=campanhas&antigas=1">Voltar às campanhas</a></div></div>
+    <div class="acoes"><a class="btn" href="#/campanhas">Voltar às campanhas</a></div></div>
   <div class="card">
     <label class="arquivo" for="arqDiv"><span class="ico vazio2" id="icoDiv">XLS</span><span class="txt"><b id="nomeDiv">Escolher o arquivo do SMAR</b><span class="dica" id="detDiv">Arquivo "Parcelamento Vencido" (.xls ou .xlsx), do jeito que sai do sistema.</span></span><span class="btn peq">Escolher arquivo</span>
       <input type="file" id="arqDiv" accept=".xls,.xlsx" class="so-leitor"></label>
@@ -1763,6 +1915,8 @@ async function atualizarAvisoGlobal() {
   const [meus, agend, efet] = await Promise.all([buscarBoletosAConferir(false), buscarAgendamentosAConferir(false), buscarEfetivacoesAConferir(false)]);
   const link = document.querySelector('#menu a[data-rota="pendentes"]');
   const nTot = meus.length + agend.length + efet.length;
+  const gb = document.querySelector('#menu [data-grupo="manual"] .grupo-badge');
+  if (gb) gb.innerHTML = nTot ? ` <span class="badge" title="${nTot} pendência(s) a conferir">${nTot}</span>` : '';
   if (link) link.innerHTML = 'Pendentes' + (nTot ? ` <span class="badge" title="${meus.length} boleto(s) vencido(s), ${agend.length} agendamento(s) vencido(s) e ${efet.length} encaminhamento(s) para parcelamento a conferir">${nTot}</span>` : '');
   if (meus.length) msgs.push(`⚠ Você tem <strong>${meus.length}</strong> boleto(s) vencido(s) para conferir se foram pagos. <a href="#/pendentes?filtro=venc">Conferir agora</a>`);
   if (efet.length) msgs.push(`📝 Você tem <strong>${efet.length}</strong> caso(s) encaminhado(s) para parcelamento. Confira se o novo acordo foi efetivado e atualize a situação. <a href="#/pendentes?filtro=efet">Conferir agora</a>`);

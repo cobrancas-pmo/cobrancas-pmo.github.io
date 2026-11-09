@@ -8,17 +8,31 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Cobranças PMO</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f4e79'/%3E%3Cpath d='M9 17l5 5 9-11' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-<script src="js/tema.js?v=202611091300"></script>
-<link rel="stylesheet" href="css/app.css?v=202611091300">
+<script src="js/tema.js?v=202611091715"></script>
+<link rel="stylesheet" href="css/app.css?v=202611091715">
 </head>
 <body>
 <header class="topo" id="topo" hidden>
   <div class="marca"><span class="logo" aria-hidden="true"></span><span>Cobranças PMO</span></div>
   <nav class="menu" id="menu" aria-label="Menu principal">
-    <a href="#/lancar" data-rota="lancar">Lançar</a>
-    <a href="#/pendentes" data-rota="pendentes">Pendentes</a>
-    <a href="#/buscar" data-rota="buscar">Buscar</a>
-    <a href="#/relatorios" data-rota="relatorios">Relatórios</a>
+    <div class="grupo" data-grupo="manual">
+      <button type="button" class="grupo-btn" aria-expanded="false" aria-controls="sub-manual">Cobrança manual<span class="grupo-badge"></span> <span class="seta" aria-hidden="true">▾</span></button>
+      <div class="submenu" id="sub-manual" hidden>
+        <a href="#/lancar" data-rota="lancar">Lançar</a>
+        <a href="#/pendentes" data-rota="pendentes">Pendentes</a>
+        <a href="#/buscar" data-rota="buscar">Buscar</a>
+        <a href="#/relatorios" data-rota="relatorios">Relatório</a>
+      </div>
+    </div>
+    <div class="grupo" data-grupo="automatica">
+      <button type="button" class="grupo-btn" aria-expanded="false" aria-controls="sub-automatica">Cobrança automática <span class="seta" aria-hidden="true">▾</span></button>
+      <div class="submenu" id="sub-automatica" hidden>
+        <a href="#/automatica" data-rota="automatica">Relatório do WhatsApp</a>
+        <a href="#/campanhas" data-rota="campanhas">Campanhas SMS/e-mail</a>
+        <a href="#/campanha-nova" data-rota="campanha-nova">Nova campanha</a>
+        <a href="#/campanha-dividir" data-rota="campanha-dividir" id="menuDividir" hidden>Dividir lista do SMAR</a>
+      </div>
+    </div>
     <a href="#/cancelamentos" data-rota="cancelamentos">Cancelamentos</a>
     <a href="#/admin" data-rota="admin" id="menuAdmin" hidden>Administração</a>
     <a href="#/conta" data-rota="conta">Minha conta</a>
@@ -31,10 +45,10 @@
   <p class="carregando">Carregando…</p>
 </main>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-<script src="js/config.js?v=202611091300"></script>
-<script src="vendor/supabase.js?v=202611091300"></script>
-<script src="vendor/chart-4.4.1.umd.js?v=202611091300"></script>
-<script src="js/campanhas.js?v=202611091300"></script>
-<script src="js/app.js?v=202611091300"></script>
+<script src="js/config.js?v=202611091715"></script>
+<script src="vendor/supabase.js?v=202611091715"></script>
+<script src="vendor/chart-4.4.1.umd.js?v=202611091715"></script>
+<script src="js/campanhas.js?v=202611091715"></script>
+<script src="js/app.js?v=202611091715"></script>
 </body>
 </html>

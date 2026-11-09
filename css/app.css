@@ -68,6 +68,17 @@ h1 { font-size: 1.45rem; } h2 { font-size: 1.15rem; } h3 { font-size: 1rem; }
 .menu a { white-space: nowrap; color: var(--primary-ink); text-decoration: none; padding: .4rem .7rem; border-radius: 8px; opacity: .85; font-weight: 500; }
 .menu a:hover { background: rgba(255,255,255,.12); opacity: 1; }
 .menu a.ativo { background: rgba(255,255,255,.2); opacity: 1; }
+/* menus com lista (Cobrança manual / Cobrança automática) — desde 09/11/2026 */
+.menu { align-items: center; }
+.grupo-btn { white-space: nowrap; color: var(--primary-ink); background: none; border: 0; font: inherit; font-weight: 500; cursor: pointer; padding: .4rem .7rem; border-radius: 8px; opacity: .85; }
+.grupo-btn:hover, .grupo-btn[aria-expanded="true"] { background: rgba(255,255,255,.12); opacity: 1; }
+.grupo-btn.ativo { background: rgba(255,255,255,.2); opacity: 1; }
+.grupo-btn .seta { font-size: .75em; }
+.submenu { position: fixed; z-index: 30; min-width: 12rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: .3rem; box-shadow: 0 8px 24px rgba(0,0,0,.18); display: flex; flex-direction: column; }
+.submenu[hidden] { display: none; }
+.submenu a { color: var(--ink); opacity: 1; padding: .45rem .7rem; border-radius: 7px; font-weight: 500; }
+.submenu a:hover { background: var(--primary-soft); }
+.submenu a.ativo { background: var(--primary-soft); color: var(--primary); }
 .usuario { display: flex; align-items: center; gap: .6rem; font-size: .9rem; }
 .usuario .btn.ghost { color: var(--primary-ink); border-color: rgba(255,255,255,.4); }
 .btn-tema { min-width: 2.4rem; padding: .4rem .6rem; }
@@ -126,6 +137,7 @@ legend { font-weight: 700; font-size: .85rem; color: var(--primary); padding: 0 
 .kpi .val { font-size: clamp(1.15rem, 2.2vw, 1.55rem); font-weight: 700; margin-top: .15rem; }
 .kpi .det { font-size: .78rem; color: var(--muted); }
 .kpi.destaque { border-left: 4px solid var(--primary); }
+.sub-rel { font-size: 1rem; margin: .6rem 0 .5rem; color: var(--ink-2); }
 .kpis.mini .kpi { padding: .5rem .7rem; } .kpis.mini .val { font-size: 1.2rem; }
 
 /* tabelas */

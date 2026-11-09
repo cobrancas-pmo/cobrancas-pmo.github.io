@@ -8,6 +8,8 @@
 //    As frases ficam na tabela atendimento_frases (Administração). Grava a conversa em atendimentos_wa,
 //    com o PRIMEIRO agente atribuído, e põe a etiqueta "campanha" nas conversas dos botões.
 //    Não cria lançamento nem atribui conversa a ninguém. Não guarda telefone nem conteúdo de mensagem.
+//    Também conta, por conversa e dia, as mensagens recebidas e enviadas de TODO o CWMKT (cwmkt_conversas_dia, 09/11/2026),
+//    para comparar com a campanha em massa.
 // 2) Importação (administrador logado no sistema): traz as conversas anteriores, a partir de uma data.
 // 3) Modo teste (administrador) e "Puxar do CWMKT" (lista as conversas abertas do cobrador).
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
@@ -131,6 +133,7 @@ async function mensagens(conv: number, desdeSeg = 0) {
 }
 const tipoMsg = (m: any) => String(m?.message_type);                 // 0/incoming, 1/outgoing, 2/activity, 3/template
 const entrada = (m: any) => ['0', 'incoming'].includes(tipoMsg(m));
+const ativ = (m: any) => tipoMsg(m) === '2' || tipoMsg(m) === 'activity';
 const ehHumano = (s: any) => /^user$/i.test(String(s?.type || ''));
 const saidaHumana = (m: any) => ['1', 'outgoing', '3', 'template'].includes(tipoMsg(m)) && ehHumano(m?.sender || { type: m?.sender_type });
 
@@ -196,6 +199,9 @@ async function webhook(req: Request, url: URL) {
       if (CAIXA && caixa !== CAIXA) { await diag('outra caixa'); return json({ ok: true, ignorado: 'outra caixa' }); }
       if (b.private) return json({ ok: true, ignorado: 'nota interna' });
       const quando = iso(b.created_at);
+      // totais do CWMKT (campanha ou não): soma 1 mensagem recebida/enviada na conversa e no dia — só números
+      if (!ativ(b) && (entrada(b) || ['1', 'outgoing', '3', 'template'].includes(tipoMsg(b))))
+        await db.rpc('cwmkt_contar', { p_conversa: convId, p_quando: quando, p_caixa: Number(caixa) || null, p_entrada: entrada(b) });
       const dia = diaSP(quando);
       // conversa aberta hoje (nova) ou reaproveitada de outro dia: na reaproveitada, o agente que já estava
       // atribuído é do atendimento antigo e não conta
@@ -279,7 +285,6 @@ async function usuario(req: Request) {
 //   Não basta "criadas desde a data": o CWMKT reaproveita a conversa antiga do contribuinte quando ele aperta o botão.
 // etapa=conversas&desde=AAAA-MM-DD&ids=1,2,3 → em cada conversa, a partir da data, acha por dia a 1ª mensagem
 //   que começa por uma frase e grava um atendimento por dia (sem repetir os que já existem)
-const ativ = (m: any) => tipoMsg(m) === '2' || tipoMsg(m) === 'activity';
 async function importar(req: Request, url: URL) {
   const perfil = await usuario(req);
   if (!perfil) return json({ erro: 'Faça login no sistema.' }, 401, cors);
@@ -315,6 +320,15 @@ async function importar(req: Request, url: URL) {
       try {
         const msgs = await mensagens(conv, limite);
         const quandoDe = (m: any) => iso(m.created_at);
+        // totais do CWMKT por dia nesta conversa (recebidas do contribuinte e enviadas pela Prefeitura)
+        const tot = new Map<string, { r: number; e: number; cx: number | null }>();
+        for (const m of msgs) {
+          if (m.private || ativ(m) || Number(m.created_at) < limite) continue;
+          const ent = entrada(m); if (!ent && !['1', 'outgoing', '3', 'template'].includes(tipoMsg(m))) continue;
+          const d = diaSP(quandoDe(m)); const t = tot.get(d) || { r: 0, e: 0, cx: Number(m.inbox_id) || null };
+          if (ent) t.r++; else t.e++; tot.set(d, t);
+        }
+        for (const [d, t] of tot) await db.rpc('cwmkt_contar_dia', { p_conversa: conv, p_dia: d, p_caixa: t.cx, p_recebidas: t.r, p_enviadas: t.e });
         // por dia, a 1ª mensagem (do contribuinte ou do atendente) que começa por uma frase
         const inicios = new Map<string, { m: any; f: Frase }>();
         for (const m of msgs) {
