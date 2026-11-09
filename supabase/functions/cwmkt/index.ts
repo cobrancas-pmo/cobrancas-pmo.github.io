@@ -185,18 +185,13 @@ async function webhook(req: Request, url: URL) {
       const convId = Number(conv.id) || null;
       if (!convId) return json({ ok: true, ignorado: 'sem conversa' });
       const caixa = String(b.inbox?.id ?? conv.inbox_id ?? '');
-      // DIAGNÓSTICO (09/11/2026): anota por que um clique de botão foi descartado — sem nome nem telefone
-      // (09/11 tarde) também quando o texto tem "desconto"/"parcelar" em qualquer lugar, ou a mensagem do contribuinte
-      // traz atributos (resposta de botão); o texto vai com números trocados por # e só os primeiros 40 caracteres
+      // DIAGNÓSTICO: anota por que uma mensagem com cara de botão de campanha (começa por "pagar agora", "quero parcelar" ou
+      // "não reconheço a cobrança") foi descartada — só nesses casos, para não guardar texto de mensagem comum
       const tx = norm(semPrefixo(b.content));
-      const botao = /^(pagar agora|quero parcelar)/.test(tx);
-      const palavra = /desconto|parcel/.test(tx);
-      const vazio = !tx;
-      const attrs = b.content_attributes && typeof b.content_attributes === 'object' ? Object.keys(b.content_attributes).filter(k => b.content_attributes[k] != null && b.content_attributes[k] !== '') : [];
+      const botao = /^(pagar agora|quero parcelar|nao reconheco a cobranca)/.test(tx);
       const diag = async (motivo: string) => {
-        if (!botao && !palavra && !(entrada(b) && (vazio || attrs.length))) return;
-        const bruto = String(b.content ?? '').replace(/\d/g, '#').replace(/\s+/g, ' ').slice(0, 40);
-        await log('diag', convId, `${motivo} · caixa ${caixa || '?'} (config ${CAIXA || 'todas'}) · tipo ${tipoMsg(b)} · ctype ${b.content_type ?? '?'} · sender ${b.sender?.type ?? '?'} · texto [${bruto}] · attrs ${attrs.join('/').slice(0, 60)}`);
+        if (!botao) return;
+        await log('diag', convId, `${motivo} · caixa ${caixa || '?'} · tipo ${tipoMsg(b)} · texto [${tx.replace(/\d/g, '#').slice(0, 40)}]`);
       };
       if (CAIXA && caixa !== CAIXA) { await diag('outra caixa'); return json({ ok: true, ignorado: 'outra caixa' }); }
       if (b.private) return json({ ok: true, ignorado: 'nota interna' });
@@ -250,10 +245,6 @@ async function webhook(req: Request, url: URL) {
       const convId = Number(b.id) || null;
       if (!convId) return json({ ok: true, ignorado: 'sem conversa' });
       const dia = diaSP(new Date().toISOString());
-      // DIAGNÓSTICO (09/11 tarde): a conversa chega com uma mensagem de botão que não passou como "mensagem criada"?
-      const um = Array.isArray(b.messages) ? b.messages[b.messages.length - 1] : null;
-      if (um && /desconto|parcel/.test(norm(semPrefixo(um.content))))
-        await log('diag', convId, `${ev} · status ${b.status ?? '?'} · última msg tipo ${tipoMsg(um)} · texto [${String(um.content ?? '').replace(/\d/g, '#').slice(0, 40)}]`);
       const at = await atendimento(convId, dia);
       if (!at || at.agente_id != null || at.agente_nome) return json({ ok: true, ignorado: 'nada a fazer' });
       const a = b.meta?.assignee;
