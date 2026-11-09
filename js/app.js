@@ -1340,7 +1340,7 @@ function desenharAtendimentosWa(box, todas, ini, fim, ag) {
         <td><button class="btn peq nao-imprimir" type="button" data-conv="${i}">Ver conversas</button></td></tr>
         <tr class="casos" id="conv-${i}" hidden><td colspan="${gats.length + 3}"></td></tr>`; }).join('')}
       <tr class="total"><td>Total</td>${gats.map(g => `<td class="num">${NUM.format(conta(L, g))}</td>`).join('')}<td class="num">${NUM.format(L.length)}</td><td></td></tr></tbody></table></div>
-    <p class="dica">Conta cada conversa uma vez, na data em que começou, para o primeiro atendente atribuído a ela no CWMKT (mesmo que depois passe para outro). "Sem login" = atendente do CWMKT que não tem acesso ao sistema. ${ehSup() ? 'Supervisão e administração veem toda a equipe.' : 'Você vê só os seus atendimentos.'}</p></div>`;
+    <p class="dica">Conta cada conversa uma vez por dia (o CWMKT reaproveita a conversa antiga do contribuinte), na data do clique ou da 1ª mensagem, para o primeiro atendente atribuído a ela no CWMKT (mesmo que depois passe para outro). "Sem login" = atendente do CWMKT que não tem acesso ao sistema. ${ehSup() ? 'Supervisão e administração veem toda a equipe.' : 'Você vê só os seus atendimentos.'}</p></div>`;
   $$('[data-conv]', box).forEach(b => b.addEventListener('click', () => {
     const tr = $('#conv-' + b.dataset.conv); if (!tr.hidden) { tr.hidden = true; b.textContent = 'Ver conversas'; return; }
     tr.hidden = false; b.textContent = 'Fechar';
@@ -1992,7 +1992,7 @@ async function telaAdmin() {
     <form class="linha" id="fNovoSet" style="margin-top:.8rem"><label class="campo">Novo setor<input name="nome" maxlength="40" required></label><button class="btn prim">Adicionar</button></form></div>
   <details class="card" id="cardCwmkt"><summary><h2 style="display:inline">Ligação com o CWMKT (WhatsApp)</h2> <span class="dica">conta os atendimentos que começam pelos botões da campanha e pela cobrança manual</span></summary>
     <h3 style="margin-top:.8rem">Frases que abrem um atendimento</h3>
-    <p class="dica">Quando a <b>primeira mensagem do contribuinte</b> começa por uma frase marcada "Contribuinte" (o botão que ele apertou), ou quando o <b>atendente</b> envia uma mensagem que começa por uma frase marcada "Atendente", a conversa entra em Relatórios → Campanhas, na coluna indicada, para o 1º atendente atribuído. Maiúsculas, acentos e pontuação não importam. As conversas dos botões do contribuinte recebem a etiqueta "campanha" no CWMKT.</p>
+    <p class="dica">Quando o <b>contribuinte</b> manda uma mensagem que começa por uma frase marcada "Contribuinte" (o botão que ele apertou — mesmo numa conversa antiga que o CWMKT reaproveitou), ou quando o <b>atendente</b> envia uma mensagem que começa por uma frase marcada "Atendente", a conversa entra em Relatórios → Campanhas, na coluna indicada, para o 1º atendente atribuído. Cada conversa conta uma vez por dia. Maiúsculas, acentos e pontuação não importam. As conversas dos botões do contribuinte recebem a etiqueta "campanha" no CWMKT.</p>
     <div class="tabela-wrap"><table><thead><tr><th>Começa com</th><th>Coluna no relatório</th><th>Quem envia</th><th>Ativa</th><th></th></tr></thead><tbody id="tbFrases"><tr><td colspan="5" class="vazio">Carregando…</td></tr></tbody></table></div>
     <form id="fFrase" class="linha" style="margin-top:.5rem">
       <label class="campo" style="flex:2">Nova frase<input name="frase" required maxlength="200" placeholder="Quero Parcelar!"></label>
@@ -2000,7 +2000,7 @@ async function telaAdmin() {
       <label class="campo">Quem envia<select name="quem"><option value="contribuinte">Contribuinte</option><option value="atendente">Atendente</option></select></label>
       <button class="btn" type="submit">Incluir</button></form>
     <h3 style="margin-top:1.2rem">Trazer conversas anteriores</h3>
-    <p class="dica">Procura no CWMKT as conversas que começaram a partir da data escolhida e inclui no relatório as que abriram por uma das frases acima (sem repetir as que já estão lá). Pode levar alguns minutos: deixe esta página aberta.</p>
+    <p class="dica">Procura no CWMKT as conversas com movimento a partir da data escolhida e inclui no relatório os atendimentos que começaram por uma das frases acima, um por dia em cada conversa (sem repetir os que já estão lá). Também põe a etiqueta "campanha" nas conversas dos botões. Pode levar alguns minutos: deixe esta página aberta.</p>
     <div class="linha"><label class="campo">Desde<input type="date" id="impDesde" value="2026-10-30"></label><button class="btn" type="button" id="btnImpCwmkt">Trazer conversas</button></div><div id="resImp"></div>
     <h3 style="margin-top:1.2rem">Conferência</h3>
     <p class="dica">Confere se a chave do CWMKT está cadastrada e mostra os últimos avisos recebidos.</p>
@@ -2131,7 +2131,7 @@ async function carregarFrases() {
   });
 }
 
-// Traz as conversas anteriores do CWMKT: lista as conversas criadas desde a data e manda em lotes para a função cwmkt.
+// Traz as conversas anteriores do CWMKT: lista as conversas com movimento desde a data e manda em lotes para a função cwmkt.
 async function importarCwmkt() {
   const box = $('#resImp'), btn = $('#btnImpCwmkt'), desde = $('#impDesde').value;
   if (!desde) return toast('Escolha a data.', true);
@@ -2145,12 +2145,12 @@ async function importarCwmkt() {
     const ids = []; let pg = 1;
     while (pg) { const d = await chamar(`etapa=lista&desde=${desde}&pg=${pg}`); ids.push(...d.ids); pg = d.proxima; }
     const tot = { novos: 0, ja: 0, outros: 0, erros: 0 };
-    for (let i = 0; i < ids.length; i += 20) {
-      box.innerHTML = `<p class="carregando">Conferindo ${NUM.format(Math.min(i + 20, ids.length))} de ${NUM.format(ids.length)} conversas…</p>`;
-      const d = await chamar(`etapa=conversas&ids=${ids.slice(i, i + 20).join(',')}`);
+    for (let i = 0; i < ids.length; i += 10) {
+      box.innerHTML = `<p class="carregando">Conferindo ${NUM.format(Math.min(i + 10, ids.length))} de ${NUM.format(ids.length)} conversas…</p>`;
+      const d = await chamar(`etapa=conversas&desde=${desde}&ids=${ids.slice(i, i + 10).join(',')}`);
       for (const k of Object.keys(tot)) tot[k] += d[k] || 0;
     }
-    box.innerHTML = `<div class="aviso ok">${NUM.format(ids.length)} conversas conferidas: <b>${NUM.format(tot.novos)}</b> atendimento(s) incluído(s) no relatório, ${NUM.format(tot.ja)} já estavam lá e ${NUM.format(tot.outros)} começaram de outro jeito.${tot.erros ? ` ${NUM.format(tot.erros)} não puderam ser lidas (tente de novo mais tarde).` : ''}</div>`;
+    box.innerHTML = `<div class="aviso ok">${NUM.format(ids.length)} conversas conferidas: <b>${NUM.format(tot.novos)}</b> atendimento(s) incluído(s) no relatório, ${NUM.format(tot.ja)} já estavam lá e ${NUM.format(tot.outros)} conversas sem frase de campanha no período.${tot.erros ? ` ${NUM.format(tot.erros)} não puderam ser lidas (tente de novo mais tarde).` : ''}</div>`;
   } catch (e) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(e))}</div>`; }
   btn.disabled = false;
 }

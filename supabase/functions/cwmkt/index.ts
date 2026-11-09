@@ -1,8 +1,9 @@
 // Cobranças PMO – ligação com o CWMKT (WhatsApp da Prefeitura).
 // Desde 06/11/2026 o disparo em massa é feito por outro sistema. A função:
 // 1) Recebe os avisos (webhook) do CWMKT e reconhece o INÍCIO de um atendimento de campanha:
-//    - a 1ª mensagem do contribuinte começa por uma frase "contribuinte" (o botão que ele apertou:
-//      "Pagar Agora com desconto!", "Quero Parcelar!"), ou
+//    - a mensagem do contribuinte começa por uma frase "contribuinte" (o botão que ele apertou:
+//      "Pagar Agora com desconto!", "Quero Parcelar!") — vale também em conversa antiga reaproveitada
+//      pelo CWMKT (09/11/2026); conta um atendimento por conversa POR DIA, ou
 //    - o atendente manda uma mensagem que começa por uma frase "atendente" ("Prezado Contribuinte: Tributo:").
 //    As frases ficam na tabela atendimento_frases (Administração). Grava a conversa em atendimentos_wa,
 //    com o PRIMEIRO agente atribuído, e põe a etiqueta "campanha" nas conversas dos botões.
@@ -37,7 +38,7 @@ async function sha256(t: string) {
 }
 
 // ---------- API do CWMKT ----------
-async function api(path: string, init: RequestInit = {}) {
+async function api1(path: string, init: RequestInit = {}) {
   const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 9000);
   try {
     const r = await fetch(`${BASE}/api/v1/accounts/${CONTA}${path}`, {
@@ -46,10 +47,22 @@ async function api(path: string, init: RequestInit = {}) {
     });
     const txt = await r.text();
     let body: any = null; try { body = txt ? JSON.parse(txt) : null; } catch { body = txt; }
-    if (!r.ok) throw new Error(`CWMKT ${init.method || 'GET'} ${path} → ${r.status}`);
+    if (!r.ok) throw Object.assign(new Error(`CWMKT ${init.method || 'GET'} ${path} → ${r.status}`), { status: r.status });
     return body;
   } finally { clearTimeout(t); }
 }
+// consultas (GET) que falham por demora ou excesso de pedidos são tentadas mais uma vez
+async function api(path: string, init: RequestInit = {}) {
+  try { return await api1(path, init); }
+  catch (e: any) {
+    const ler = !init.method || init.method === 'GET' || path.startsWith('/conversations/filter');
+    if (!ler || !(e?.name === 'AbortError' || [429, 500, 502, 503, 504].includes(Number(e?.status)))) throw e;
+    await new Promise(r => setTimeout(r, 1500));
+    return await api1(path, init);
+  }
+}
+// dia (AAAA-MM-DD) no horário de Brasília
+const diaSP = (t: string) => new Date(t).toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
 const lista = (b: any) => (Array.isArray(b) ? b : Array.isArray(b?.payload) ? b.payload : []);
 type Frase = { frase: string; gatilho: string; quem: string; n: string };
 let cache: { agentes?: any[]; times?: any[]; etiquetas?: any[]; frases?: Frase[] } = {};
@@ -104,12 +117,14 @@ async function agentePorId(id: unknown, reserva: any = null) {
   return nome ? { id: n, nome: nome.slice(0, 120), email: (a?.email || reserva?.email || null) } : null;
 }
 // todas as mensagens da conversa, da mais antiga para a mais nova (até 160)
-async function mensagens(conv: number) {
+// (com desdeSeg, para de voltar quando já chegou em mensagens anteriores a essa hora)
+async function mensagens(conv: number, desdeSeg = 0) {
   let msgs: any[] = []; let antes = '';
   for (let i = 0; i < 8; i++) {
     const p = lista(await api(`/conversations/${conv}/messages${antes}`));
     msgs = [...p, ...msgs];
     if (p.length < 20) break;
+    if (desdeSeg && Math.min(...p.map((m: any) => Number(m.created_at) || Infinity)) < desdeSeg) break;
     antes = `?before=${Math.min(...p.map((m: any) => Number(m.id)))}`;
   }
   return msgs.sort((a, b) => Number(a.id) - Number(b.id));
@@ -120,8 +135,10 @@ const ehHumano = (s: any) => /^user$/i.test(String(s?.type || ''));
 const saidaHumana = (m: any) => ['1', 'outgoing', '3', 'template'].includes(tipoMsg(m)) && ehHumano(m?.sender || { type: m?.sender_type });
 
 // ---------- atendimentos ----------
-async function atendimento(conv: number) {
-  const { data } = await db.from('atendimentos_wa').select('conversa,gatilho,agente_id,agente_nome').eq('conversa', conv).maybeSingle();
+// um atendimento por conversa POR DIA (o CWMKT reaproveita a conversa antiga do contribuinte)
+async function atendimento(conv: number, dia: string) {
+  const { data, error } = await db.from('atendimentos_wa').select('conversa,dia,gatilho,agente_id,agente_nome').eq('conversa', conv).eq('dia', dia).maybeSingle();
+  if (error) throw new Error(error.message);
   return data;
 }
 async function abrir(row: Record<string, unknown>) {
@@ -129,10 +146,10 @@ async function abrir(row: Record<string, unknown>) {
   if (error && !/duplicate|unique/i.test(error.message)) throw new Error(error.message);
   return !error;
 }
-async function definirAgente(conv: number, ag: { id: number; nome: string; email: string | null }, quando: string) {
+async function definirAgente(conv: number, dia: string, ag: { id: number | null; nome: string; email: string | null }, quando: string) {
   const { data } = await db.from('atendimentos_wa')
     .update({ agente_id: ag.id, agente_nome: ag.nome, agente_email: ag.email, atribuido_em: quando })
-    .eq('conversa', conv).is('agente_id', null).is('agente_nome', null).select('conversa');
+    .eq('conversa', conv).eq('dia', dia).is('agente_id', null).is('agente_nome', null).select('conversa');
   return !!data?.length;
 }
 const log = (evento: string, conv: number | null, resultado: string) => db.rpc('cwmkt_log', { p_evento: evento, p_conversa: conv, p_resultado: resultado.slice(0, 300) });
@@ -180,23 +197,23 @@ async function webhook(req: Request, url: URL) {
       if (CAIXA && caixa !== CAIXA) { await diag('outra caixa'); return json({ ok: true, ignorado: 'outra caixa' }); }
       if (b.private) return json({ ok: true, ignorado: 'nota interna' });
       const quando = iso(b.created_at);
-      const at = await atendimento(convId);
+      const dia = diaSP(quando);
+      // conversa aberta hoje (nova) ou reaproveitada de outro dia: na reaproveitada, o agente que já estava
+      // atribuído é do atendimento antigo e não conta
+      const nova = conv.created_at ? diaSP(iso(conv.created_at)) === dia : false;
+      const at = await atendimento(convId, dia);
       if (entrada(b)) {
-        if (at) { await diag('atendimento já aberto'); return json({ ok: true, ignorado: 'atendimento já aberto' }); }
+        if (at) { await diag('atendimento já aberto hoje'); return json({ ok: true, ignorado: 'atendimento já aberto hoje' }); }
         const f = await casa(b.content, 'contribuinte');
         if (!f) { await diag(`não casou frase (${(await frases()).length} frases)`); return json({ ok: true, ignorado: 'não começa por frase de campanha' }); }
-        // só vale se for a 1ª mensagem do contribuinte nesta conversa
-        const msgs = await mensagens(convId);
-        const prim = msgs.find(m => !m.private && entrada(m));
-        if (prim && Number(prim.id) !== Number(b.id)) { await diag(`não é a 1ª msg (${msgs.filter(m => !m.private && entrada(m)).length} do contribuinte, 1ª em ${iso(prim.created_at).slice(0, 16)})`); return json({ ok: true, ignorado: 'não é a 1ª mensagem do contribuinte' }); }
         if (!(await abrir({ conversa: convId, gatilho: f.gatilho, iniciada_em: quando, caixa: Number(caixa) || null, origem: 'aviso', link: linkDe(convId) })))
           return json({ ok: true, ignorado: 'já aberto' });
         const ass = conv.meta?.assignee;
-        const ag = ass?.id ? await agentePorId(ass.id, ass) : null;
-        if (ag) await definirAgente(convId, ag, quando);
+        const ag = nova && ass?.id ? await agentePorId(ass.id, ass) : null;
+        if (ag) await definirAgente(convId, dia, ag, quando);
         const et = await etiquetar(convId);
-        if (et) await db.from('atendimentos_wa').update({ etiqueta: true }).eq('conversa', convId);
-        await log(ev, convId, `${f.gatilho}: atendimento aberto${ag ? ' · 1º atendente ' + ag.nome : ''}${et ? ' · etiqueta campanha' : ' · SEM etiqueta'}`);
+        if (et) await db.from('atendimentos_wa').update({ etiqueta: true }).eq('conversa', convId).eq('dia', dia);
+        await log(ev, convId, `${f.gatilho}: atendimento aberto${nova ? '' : ' (conversa reaproveitada)'}${ag ? ' · 1º atendente ' + ag.nome : ''}${et ? ' · etiqueta campanha' : ' · SEM etiqueta'}`);
         return json({ ok: true });
       }
       if (saidaHumana(b)) {
@@ -210,11 +227,15 @@ async function webhook(req: Request, url: URL) {
           return json({ ok: true });
         }
         if (at.agente_id == null && !at.agente_nome) {
-          // ainda sem atendente: vale o agente atribuído à conversa; se não houver, quem respondeu
+          // ainda sem atendente: vale o agente atribuído à conversa; se não houver (ou se for de outro
+          // atendimento, numa conversa reaproveitada), quem respondeu
           let quem = null;
-          try { const c = await api(`/conversations/${convId}`); const a = c?.meta?.assignee; if (a?.id) quem = await agentePorId(a.id, a); } catch { /* segue com quem respondeu */ }
+          try {
+            const c = await api(`/conversations/${convId}`); const a = c?.meta?.assignee;
+            if (a?.id && (nova || Number(a.id) === Number(ag?.id))) quem = await agentePorId(a.id, a);
+          } catch { /* segue com quem respondeu */ }
           quem ??= ag;
-          if (quem && await definirAgente(convId, quem, quando)) await log(ev, convId, `${at.gatilho}: 1º atendente ${quem.nome}`);
+          if (quem && await definirAgente(convId, dia, quem, quando)) await log(ev, convId, `${at.gatilho}: 1º atendente ${quem.nome}`);
         }
         return json({ ok: true });
       }
@@ -224,12 +245,19 @@ async function webhook(req: Request, url: URL) {
     if (ev === 'conversation_updated' || ev === 'conversation_status_changed' || ev === 'assignee_changed') {
       const convId = Number(b.id) || null;
       if (!convId) return json({ ok: true, ignorado: 'sem conversa' });
-      const at = await atendimento(convId);
+      const dia = diaSP(new Date().toISOString());
+      const at = await atendimento(convId, dia);
       if (!at || at.agente_id != null || at.agente_nome) return json({ ok: true, ignorado: 'nada a fazer' });
       const a = b.meta?.assignee;
       if (!a?.id) return json({ ok: true, ignorado: 'sem agente' });
+      // numa conversa reaproveitada, só vale se a atribuição mudou agora (senão é o agente de outro dia)
+      const ch = b.changed_attributes;
+      const mudou = ev === 'assignee_changed' || (Array.isArray(ch) ? ch.some((x: any) => x && typeof x === 'object' && 'assignee_id' in x)
+                                                  : !!(ch && typeof ch === 'object' && 'assignee_id' in ch));
+      const nova = b.created_at ? diaSP(iso(b.created_at)) === dia : false;
+      if (!mudou && !nova) return json({ ok: true, ignorado: 'agente de antes' });
       const ag = await agentePorId(a.id, a);
-      if (ag && await definirAgente(convId, ag, new Date().toISOString())) await log(ev, convId, `${at.gatilho}: 1º atendente ${ag.nome}`);
+      if (ag && await definirAgente(convId, dia, ag, new Date().toISOString())) await log(ev, convId, `${at.gatilho}: 1º atendente ${ag.nome}`);
       return json({ ok: true });
     }
     return json({ ok: true, ignorado: ev || 'sem evento' });
@@ -248,26 +276,33 @@ async function usuario(req: Request) {
 }
 
 // ---------- Importação: conversas anteriores (só administrador) ----------
-// etapa=lista&desde=AAAA-MM-DD&pg=N → ids das conversas criadas desde a data (até 40 páginas por chamada)
-// etapa=conversas&ids=1,2,3 → confere cada conversa e grava as que começaram por uma frase
+// etapa=lista&desde=AAAA-MM-DD&pg=N → ids das conversas com MOVIMENTO desde a data (até 40 páginas por chamada).
+//   Não basta "criadas desde a data": o CWMKT reaproveita a conversa antiga do contribuinte quando ele aperta o botão.
+// etapa=conversas&desde=AAAA-MM-DD&ids=1,2,3 → em cada conversa, a partir da data, acha por dia a 1ª mensagem
+//   que começa por uma frase e grava um atendimento por dia (sem repetir os que já existem)
+const ativ = (m: any) => tipoMsg(m) === '2' || tipoMsg(m) === 'activity';
 async function importar(req: Request, url: URL) {
   const perfil = await usuario(req);
   if (!perfil) return json({ erro: 'Faça login no sistema.' }, 401, cors);
   if (perfil.papel !== 'admin') return json({ erro: 'Somente o administrador.' }, 403, cors);
   if (!BASE || !TOKEN || !CONTA) return json({ erro: 'A ligação com o CWMKT ainda não foi configurada.' }, 200, cors);
   cache = {};
+  const desde = String(url.searchParams.get('desde') || '');
+  if (!/^\d{4}-\d\d-\d\d$/.test(desde)) return json({ erro: 'Data inválida.' }, 200, cors);
+  const limite = new Date(desde + 'T00:00:00-03:00').getTime() / 1000;
   try {
     if (url.searchParams.get('etapa') === 'lista') {
-      const desde = String(url.searchParams.get('desde') || '');
-      if (!/^\d{4}-\d\d-\d\d$/.test(desde)) return json({ erro: 'Data inválida.' }, 200, cors);
       const d = new Date(desde + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - 1);   // o filtro do CWMKT é "depois de"
-      const corpo = { payload: [{ attribute_key: 'created_at', filter_operator: 'is_greater_than', values: [d.toISOString().slice(0, 10)], query_operator: null }] };
+      const filtro = (campo: string) => ({ payload: [{ attribute_key: campo, filter_operator: 'is_greater_than', values: [d.toISOString().slice(0, 10)], query_operator: null }] });
       const ini = Math.max(1, Number(url.searchParams.get('pg')) || 1); const ids: number[] = []; let proxima: number | null = null;
-      const limite = new Date(desde + 'T00:00:00-03:00').getTime() / 1000;
+      let campo = 'last_activity_at';
       for (let p = ini; p < ini + 40; p++) {
-        const r = await api(`/conversations/filter?page=${p}`, { method: 'POST', body: JSON.stringify(corpo) });
+        let r: any;
+        try { r = await api(`/conversations/filter?page=${p}`, { method: 'POST', body: JSON.stringify(filtro(campo)) }); }
+        catch (e) { if (campo === 'created_at' || p !== ini) throw e; campo = 'created_at'; p--; continue; }   // CWMKT sem esse filtro
         const itens = lista(r?.payload ? r : r?.data);
-        ids.push(...itens.filter((c: any) => (!CAIXA || String(c.inbox_id) === CAIXA) && Number(c.created_at) >= limite).map((c: any) => Number(c.id)));
+        ids.push(...itens.filter((c: any) => (!CAIXA || String(c.inbox_id) === CAIXA)
+          && Number(campo === 'created_at' ? c.created_at : (c.last_activity_at || c.timestamp || c.created_at)) >= limite).map((c: any) => Number(c.id)));
         if (itens.length < 25) { proxima = null; break; }
         proxima = p + 1;
       }
@@ -279,30 +314,44 @@ async function importar(req: Request, url: URL) {
     const res = { novos: 0, ja: 0, outros: 0, erros: 0 };
     for (const conv of ids) {
       try {
-        if (await atendimento(conv)) { res.ja++; continue; }
-        const msgs = await mensagens(conv);
-        const pub = msgs.filter(m => !m.private && tipoMsg(m) !== '2' && tipoMsg(m) !== 'activity');
-        const m0 = pub.find(m => entrada(m) || saidaHumana(m));
-        let f: Frase | null = null; let quem: any = null;
-        if (m0 && entrada(m0)) f = await casa(m0.content, 'contribuinte');
-        else if (m0 && saidaHumana(m0)) { f = await casa(m0.content, 'atendente'); if (f) quem = await agentePorId(m0.sender?.id, m0.sender); }
-        if (!f || !m0) { res.outros++; continue; }
-        // 1º agente atribuído: pelas anotações do CWMKT ("Atribuído a X por Y", "X atribuiu a si mesmo essa conversa")
-        let atrib: string | null = null;
+        const msgs = await mensagens(conv, limite);
+        const quandoDe = (m: any) => iso(m.created_at);
+        // por dia, a 1ª mensagem (do contribuinte ou do atendente) que começa por uma frase
+        const inicios = new Map<string, { m: any; f: Frase }>();
         for (const m of msgs) {
-          if (tipoMsg(m) !== '2' && tipoMsg(m) !== 'activity') continue;
-          if (Number(m.id) < Number(m0.id)) continue;
-          const t = String(m.content || '').trim();
-          let x = t.match(/^Atribuído a (.+?) por .+$/i) || t.match(/^Assigned to (.+?) by .+$/i);
-          let nome = x && !nomesTimes.has(norm(x[1])) ? x[1] : null;
-          if (!nome) { x = t.match(/^(.+?) atribuiu a si mesm[oa] (essa|esta) conversa/i) || t.match(/^(.+?) self-assigned this conversation/i); nome = x ? x[1] : null; }
-          if (nome) { const a = ags.find((g: any) => norm(g.name) === norm(nome)); quem = a ? await agentePorId(a.id, a) : { id: null, nome: nome.trim().slice(0, 120), email: null }; atrib = iso(m.created_at); break; }
+          if (m.private || ativ(m) || Number(m.created_at) < limite) continue;
+          const f = entrada(m) ? await casa(m.content, 'contribuinte') : saidaHumana(m) ? await casa(m.content, 'atendente') : null;
+          if (!f) continue;
+          const dia = diaSP(quandoDe(m));
+          if (!inicios.has(dia)) inicios.set(dia, { m, f });
         }
-        const ok = await abrir({ conversa: conv, gatilho: f.gatilho, iniciada_em: iso(m0.created_at), caixa: null, origem: 'importacao', link: linkDe(conv),
-          agente_id: quem?.id ?? null, agente_nome: quem?.nome ?? null, agente_email: quem?.email ?? null, atribuido_em: quem ? (atrib || iso(m0.created_at)) : null });
-        if (!ok) { res.ja++; continue; }
-        res.novos++;
-        if (f.quem === 'contribuinte' && await etiquetar(conv)) await db.from('atendimentos_wa').update({ etiqueta: true }).eq('conversa', conv);
+        if (!inicios.size) { res.outros++; continue; }
+        let etiq = false;
+        for (const [dia, { m: m0, f }] of inicios) {
+          if (await atendimento(conv, dia)) { res.ja++; if (f.quem === 'contribuinte') etiq = true; continue; }
+          let quem: any = null; let atrib: string | null = null;
+          const depois = (m: any) => Number(m.id) > Number(m0.id) && diaSP(quandoDe(m)) === dia;
+          if (f.quem === 'atendente') { quem = await agentePorId(m0.sender?.id, m0.sender); atrib = quandoDe(m0); }
+          else {
+            // 1º agente atribuído depois do clique: pelas anotações do CWMKT ("Atribuído a X por Y", "X atribuiu a si mesmo essa conversa")
+            for (const m of msgs) {
+              if (!ativ(m) || !depois(m)) continue;
+              const t = String(m.content || '').trim();
+              let x = t.match(/^Atribuído a (.+?) por .+$/i) || t.match(/^Assigned to (.+?) by .+$/i);
+              let nome = x && !nomesTimes.has(norm(x[1])) ? x[1] : null;
+              if (!nome) { x = t.match(/^(.+?) atribuiu a si mesm[oa] (essa|esta) conversa/i) || t.match(/^(.+?) self-assigned this conversation/i); nome = x ? x[1] : null; }
+              if (nome) { const a = ags.find((g: any) => norm(g.name) === norm(nome)); quem = a ? await agentePorId(a.id, a) : { id: null, nome: nome.trim().slice(0, 120), email: null }; atrib = quandoDe(m); break; }
+            }
+            // sem anotação: o 1º atendente que respondeu depois do clique
+            if (!quem) { const r = msgs.find(m => !m.private && depois(m) && saidaHumana(m)); if (r) { quem = await agentePorId(r.sender?.id, r.sender); atrib = quandoDe(r); } }
+          }
+          const ok = await abrir({ conversa: conv, gatilho: f.gatilho, iniciada_em: quandoDe(m0), caixa: null, origem: 'importacao', link: linkDe(conv),
+            agente_id: quem?.id ?? null, agente_nome: quem?.nome ?? null, agente_email: quem?.email ?? null, atribuido_em: quem ? atrib : null });
+          if (!ok) { res.ja++; continue; }
+          res.novos++;
+          if (f.quem === 'contribuinte') etiq = true;
+        }
+        if (etiq && await etiquetar(conv)) await db.from('atendimentos_wa').update({ etiqueta: true }).eq('conversa', conv).gte('iniciada_em', new Date(limite * 1000).toISOString());
       } catch (_) { res.erros++; }
     }
     if (res.novos) await log('importacao', null, `${perfil.nome}: ${res.novos} atendimento(s) trazido(s) do CWMKT`);
