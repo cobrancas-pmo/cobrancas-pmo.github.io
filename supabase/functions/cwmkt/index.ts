@@ -25,7 +25,7 @@ const ETIQ_CAMPANHA = 'campanha';
 const SITE = 'https://cobrancas-pmo.github.io';
 
 const db = createClient(ENV('SUPABASE_URL'), ENV('SUPABASE_SERVICE_ROLE_KEY'), { auth: { persistSession: false } });
-const norm = (s: unknown) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+const norm = (s: unknown) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 const cors = { 'Access-Control-Allow-Origin': SITE, 'Access-Control-Allow-Headers': 'authorization, content-type, apikey, x-client-info', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
 const json = (o: unknown, status = 200, extra: Record<string, string> = {}) => new Response(JSON.stringify(o), { status, headers: { 'Content-Type': 'application/json', ...extra } });
 const iso = (t: unknown) => { const n = Number(t); const d = Number.isFinite(n) && n > 0 ? new Date(n * 1000) : new Date(String(t)); return isNaN(+d) ? new Date().toISOString() : d.toISOString(); };
@@ -168,18 +168,27 @@ async function webhook(req: Request, url: URL) {
       const convId = Number(conv.id) || null;
       if (!convId) return json({ ok: true, ignorado: 'sem conversa' });
       const caixa = String(b.inbox?.id ?? conv.inbox_id ?? '');
-      if (CAIXA && caixa !== CAIXA) return json({ ok: true, ignorado: 'outra caixa' });
+      // DIAGNÓSTICO (09/11/2026): anota por que um clique de botão foi descartado — sem nome nem telefone
+      const tx = norm(semPrefixo(b.content));
+      const botao = /^(pagar agora|quero parcelar)/.test(tx);
+      const vazio = !tx;
+      const diag = async (motivo: string) => {
+        if (!botao && !(vazio && entrada(b))) return;
+        const ca = b.content_attributes && typeof b.content_attributes === 'object' ? Object.keys(b.content_attributes).join('/') : String(b.content_attributes ?? '');
+        await log('diag', convId, `${motivo} · caixa ${caixa || '?'} (config ${CAIXA || 'todas'}) · tipo ${tipoMsg(b)} · ctype ${b.content_type ?? '?'} · texto ${botao ? tx.slice(0, 25) : 'vazio'} · attrs ${ca.slice(0, 60)}`);
+      };
+      if (CAIXA && caixa !== CAIXA) { await diag('outra caixa'); return json({ ok: true, ignorado: 'outra caixa' }); }
       if (b.private) return json({ ok: true, ignorado: 'nota interna' });
       const quando = iso(b.created_at);
       const at = await atendimento(convId);
       if (entrada(b)) {
-        if (at) return json({ ok: true, ignorado: 'atendimento já aberto' });
+        if (at) { await diag('atendimento já aberto'); return json({ ok: true, ignorado: 'atendimento já aberto' }); }
         const f = await casa(b.content, 'contribuinte');
-        if (!f) return json({ ok: true, ignorado: 'não começa por frase de campanha' });
+        if (!f) { await diag(`não casou frase (${(await frases()).length} frases)`); return json({ ok: true, ignorado: 'não começa por frase de campanha' }); }
         // só vale se for a 1ª mensagem do contribuinte nesta conversa
         const msgs = await mensagens(convId);
         const prim = msgs.find(m => !m.private && entrada(m));
-        if (prim && Number(prim.id) !== Number(b.id)) return json({ ok: true, ignorado: 'não é a 1ª mensagem do contribuinte' });
+        if (prim && Number(prim.id) !== Number(b.id)) { await diag(`não é a 1ª msg (${msgs.filter(m => !m.private && entrada(m)).length} do contribuinte, 1ª em ${iso(prim.created_at).slice(0, 16)})`); return json({ ok: true, ignorado: 'não é a 1ª mensagem do contribuinte' }); }
         if (!(await abrir({ conversa: convId, gatilho: f.gatilho, iniciada_em: quando, caixa: Number(caixa) || null, origem: 'aviso', link: linkDe(convId) })))
           return json({ ok: true, ignorado: 'já aberto' });
         const ass = conv.meta?.assignee;
@@ -209,6 +218,7 @@ async function webhook(req: Request, url: URL) {
         }
         return json({ ok: true });
       }
+      await diag(`não é entrada nem saída humana (sender ${b.sender?.type ?? '?'})`);
       return json({ ok: true, ignorado: 'mensagem do bot ou do sistema' });
     }
     if (ev === 'conversation_updated' || ev === 'conversation_status_changed' || ev === 'assignee_changed') {
