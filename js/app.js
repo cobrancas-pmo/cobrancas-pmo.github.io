@@ -2450,11 +2450,27 @@ async function importarCwmkt() {
     const ids = []; let pg = 1;
     while (pg) { const d = await chamar(`etapa=lista&desde=${desde}&pg=${pg}`); ids.push(...d.ids); pg = d.proxima; }
     const tot = { novos: 0, ja: 0, outros: 0, erros: 0 };
-    for (let i = 0; i < ids.length; i += 10) {
-      box.innerHTML = `<p class="carregando">Conferindo ${NUM.format(Math.min(i + 10, ids.length))} de ${NUM.format(ids.length)} conversas…</p>`;
-      const d = await chamar(`etapa=conversas&desde=${desde}&ids=${ids.slice(i, i + 10).join(',')}`);
-      for (const k of Object.keys(tot)) tot[k] += d[k] || 0;
+    // Recuperações longas (milhares de conversas): 3 lotes de 10 ao mesmo tempo; a sessão não cai por
+    // inatividade enquanto roda; e o que já foi conferido fica anotado neste navegador, para continuar
+    // de onde parou se a página for fechada ou a sessão cair (vale por 24 horas, para a mesma data).
+    const chave = 'imp_cwmkt_' + desde; let feitos = new Set();
+    try { const g = JSON.parse(localStorage.getItem(chave) || 'null'); if (g && Date.now() - g.em < 864e5) feitos = new Set(g.ids); } catch (_) {}
+    const fila = ids.filter(id => !feitos.has(id)); const jaFeitos = ids.length - fila.length;
+    const lotes = []; for (let i = 0; i < fila.length; i += 10) lotes.push(fila.slice(i, i + 10));
+    let prontos = jaFeitos;
+    const mostrar = () => { box.innerHTML = `<p class="carregando">Conferindo ${NUM.format(prontos)} de ${NUM.format(ids.length)} conversas…${jaFeitos ? ` (continuando de onde parou)` : ''}</p>`; };
+    mostrar();
+    for (let i = 0; i < lotes.length; i += 3) {
+      resetInatividade();
+      await Promise.all(lotes.slice(i, i + 3).map(async lote => {
+        const d = await chamar(`etapa=conversas&desde=${desde}&ids=${lote.join(',')}`);
+        for (const k of Object.keys(tot)) tot[k] += d[k] || 0;
+        if (!d.erros) lote.forEach(id => feitos.add(id));
+        prontos += lote.length; mostrar();
+      }));
+      try { localStorage.setItem(chave, JSON.stringify({ em: Date.now(), ids: [...feitos] })); } catch (_) {}
     }
+    if (!tot.erros) { try { localStorage.removeItem(chave); } catch (_) {} }
     box.innerHTML = `<div class="aviso ok">${NUM.format(ids.length)} conversas conferidas: <b>${NUM.format(tot.novos)}</b> atendimento(s) incluído(s) no relatório, ${NUM.format(tot.ja)} já estavam lá e ${NUM.format(tot.outros)} conversas sem frase de campanha no período.${tot.erros ? ` ${NUM.format(tot.erros)} não puderam ser lidas (tente de novo mais tarde).` : ''}</div>`;
   } catch (e) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(e))}</div>`; }
   btn.disabled = false;
