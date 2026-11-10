@@ -9,7 +9,7 @@
 //    com o PRIMEIRO agente atribuído, e põe a etiqueta "campanha" nas conversas dos botões.
 //    Não cria lançamento nem atribui conversa a ninguém. Não guarda telefone nem conteúdo de mensagem.
 //    Também conta, por conversa e dia, as mensagens recebidas e enviadas de TODO o CWMKT (cwmkt_conversas_dia, 09/11/2026),
-//    para comparar com a campanha em massa.
+//    para comparar com a campanha em massa, e para qual TIME cada conversa foi encaminhada (cwmkt_times_dia, 10/11/2026).
 // 2) Importação (administrador logado no sistema): traz as conversas anteriores, a partir de uma data.
 // 3) Modo teste (administrador) e "Puxar do CWMKT" (lista as conversas abertas do cobrador).
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
@@ -70,6 +70,14 @@ type Frase = { frase: string; gatilho: string; quem: string; n: string };
 let cache: { agentes?: any[]; times?: any[]; etiquetas?: any[]; frases?: Frase[] } = {};
 async function agentes() { return cache.agentes ??= lista(await api('/agents')); }
 async function times() { return cache.times ??= lista(await api('/teams')); }
+// time do CWMKT para o qual a conversa foi encaminhada, a partir da anotação ("Atribuído a refis 2026 por …")
+async function timeDaAtividade(texto: unknown) {
+  const t = String(texto || '').trim();
+  const x = t.match(/^Atribu[ií]d[oa] (?:[àa] equipe |ao time |a )(.+?) por .+$/i) || t.match(/^Assigned to (?:team )?(.+?) by .+$/i);
+  if (!x) return null;
+  const n = norm(x[1]);
+  return (await times()).find((tm: any) => norm(tm.name) === n)?.name || null;
+}
 async function etiquetas() { return cache.etiquetas ??= lista(await api('/labels')); }
 async function frases(): Promise<Frase[]> {
   if (!cache.frases) {
@@ -202,6 +210,12 @@ async function webhook(req: Request, url: URL) {
       // totais do CWMKT (campanha ou não): soma 1 mensagem recebida/enviada na conversa e no dia — só números
       if (!ativ(b) && (entrada(b) || ['1', 'outgoing', '3', 'template'].includes(tipoMsg(b))))
         await db.rpc('cwmkt_contar', { p_conversa: convId, p_quando: quando, p_caixa: Number(caixa) || null, p_entrada: entrada(b) });
+      // encaminhada para um time (anotação do CWMKT): registra conversa/dia/time
+      if (ativ(b)) {
+        const tm = await timeDaAtividade(b.content);
+        if (tm) { await db.rpc('cwmkt_time', { p_conversa: convId, p_quando: quando, p_time: tm }); return json({ ok: true, time: tm }); }
+        return json({ ok: true, ignorado: 'anotação' });
+      }
       const dia = diaSP(quando);
       // conversa aberta hoje (nova) ou reaproveitada de outro dia: na reaproveitada, o agente que já estava
       // atribuído é do atendimento antigo e não conta
@@ -251,6 +265,14 @@ async function webhook(req: Request, url: URL) {
       const convId = Number(b.id) || null;
       if (!convId) return json({ ok: true, ignorado: 'sem conversa' });
       const dia = diaSP(new Date().toISOString());
+      // mudou o time da conversa: registra conversa/dia/time (o mesmo que a anotação "Atribuído a <time>")
+      const chs = Array.isArray(b.changed_attributes) ? b.changed_attributes : b.changed_attributes ? [b.changed_attributes] : [];
+      const mt = chs.find((x: any) => x && typeof x === 'object' && 'team_id' in x)?.team_id;
+      const novoTime = mt && (mt.current_value ?? mt[1]);
+      if (novoTime) {
+        const nome = b.meta?.team?.name || (await times().catch(() => [])).find((tm: any) => Number(tm.id) === Number(novoTime))?.name;
+        if (nome) await db.rpc('cwmkt_time', { p_conversa: convId, p_quando: new Date().toISOString(), p_time: nome });
+      }
       const at = await atendimento(convId, dia);
       if (!at || at.agente_id != null || at.agente_nome) return json({ ok: true, ignorado: 'nada a fazer' });
       const a = b.meta?.assignee;
@@ -329,6 +351,12 @@ async function importar(req: Request, url: URL) {
           if (ent) t.r++; else t.e++; tot.set(d, t);
         }
         for (const [d, t] of tot) await db.rpc('cwmkt_contar_dia', { p_conversa: conv, p_dia: d, p_caixa: t.cx, p_recebidas: t.r, p_enviadas: t.e });
+        // times para os quais a conversa foi encaminhada (anotações "Atribuído a <time> por …")
+        for (const m of msgs) {
+          if (!ativ(m) || Number(m.created_at) < limite) continue;
+          const tm = await timeDaAtividade(m.content);
+          if (tm) await db.rpc('cwmkt_time', { p_conversa: conv, p_quando: quandoDe(m), p_time: tm });
+        }
         // por dia, a 1ª mensagem (do contribuinte ou do atendente) que começa por uma frase
         const inicios = new Map<string, { m: any; f: Frase }>();
         for (const m of msgs) {

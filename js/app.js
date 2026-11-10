@@ -312,7 +312,7 @@ function rotear() {
   $$('#menu a').forEach(a => a.classList.toggle('ativo', a.dataset.rota === rota));
   $$('#menu .grupo').forEach(g => g.querySelector('.grupo-btn').classList.toggle('ativo', !!g.querySelector(`a[data-rota="${rota}"]`)));
   destruirGraficos();
-  const telas = { lancar: telaLancar, pendentes: telaPendentes, buscar: telaBuscar, relatorios: telaRelatorios, automatica: telaCampanhas, campanhas: telaCampanhasAntigas, 'campanha-nova': telaCampanhaNova, 'campanha-dividir': telaCampanhaDividir, cancelamentos: telaCancelamentos, admin: telaAdmin, conta: telaConta };
+  const telas = { lancar: telaLancar, pendentes: telaPendentes, buscar: telaBuscar, relatorios: telaRelatorios, automatica: telaCampanhas, times: telaTimes, campanhas: telaCampanhasAntigas, 'campanha-nova': telaCampanhaNova, 'campanha-dividir': telaCampanhaDividir, cancelamentos: telaCancelamentos, admin: telaAdmin, conta: telaConta };
   (telas[rota] || telaLancar)(params);
   app().focus({ preventScroll: true });
 }
@@ -1503,6 +1503,152 @@ function csvAtendimentosWa(ctx, ini, fim, ag) {
   const csv = '﻿' + L.map(r => r.map(c => { c = String(c ?? ''); return /[;"\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c; }).join(';')).join('\r\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   a.download = `cobranca_automatica_whatsapp_${ini}_a_${fim}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------- Cobrança automática → Fechamento por time (10/11/2026) ----------
+// Conversas do WhatsApp encaminhadas a cada time do CWMKT ("Atribuído a refis 2026 por …"), uma vez por conversa e dia.
+// Fechamento todo dia 11: período de 11 do mês anterior a 10 do mês. Compara antes e depois do início da campanha
+// (ou com o fechamento anterior) e mostra todos os times lado a lado. Dados por time desde 11/10/2026.
+const INICIO_TIMES = '2026-10-11';
+const fechamentoDe = (a, m) => { const ini = new Date(Date.UTC(a, m - 2, 11)), fim = new Date(Date.UTC(a, m - 1, 10)); return { ini: ini.toISOString().slice(0, 10), fim: fim.toISOString().slice(0, 10), rot: `Fechamento de 11/${pad(m)}/${a}` }; };
+const ehUtil = d => { const w = new Date(d + 'T12:00:00Z').getUTCDay(); return w > 0 && w < 6; };
+const addDiaIso = (d, n) => { const x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+async function telaTimes() {
+  const h = hoje(); const [ya, ma, da] = h.split('-').map(Number);
+  // fechamento atual: o que fecha no próximo dia 11 (ou hoje, se hoje é dia 11)
+  let a = ya, m = ma; if (da > 11) { m++; if (m > 12) { m = 1; a++; } }
+  const opcoes = []; for (let i = 0; i < 18; i++) { const f = fechamentoDe(a, m); if (f.fim < INICIO_TIMES) break; opcoes.push(f); m--; if (m < 1) { m = 12; a--; } }
+  let pref = {}; try { pref = JSON.parse(localStorage.getItem('times_pref') || '{}'); } catch (_) {}
+  app().innerHTML = `
+  <div class="cab nao-imprimir"><div><h1>Fechamento por time</h1><p class="sub">Cobrança automática · conversas do WhatsApp encaminhadas a cada time do CWMKT, uma vez por conversa e dia. Fechamento todo dia 11 (de 11 a 10).</p></div>
+    <div class="acoes"><button class="btn" type="button" id="btnImpT">Imprimir / salvar PDF</button><button class="btn" type="button" id="btnCsvT">Baixar (CSV)</button></div></div>
+  <form class="card nao-imprimir" id="fTimes"><div class="linha">
+    <label class="campo">Time<select name="time"><option value="">Carregando…</option></select></label>
+    <label class="campo">Período<select name="fech">${opcoes.map((o, i) => `<option value="${i}">${o.rot} (${fmtData(o.ini).slice(0, 5)} a ${fmtData(o.fim).slice(0, 5)})</option>`).join('')}<option value="x">Outro período…</option></select></label>
+    <label class="campo" data-outro hidden>De<input type="date" name="ini" min="${INICIO_TIMES}"></label>
+    <label class="campo" data-outro hidden>a<input type="date" name="fim" min="${INICIO_TIMES}"></label>
+    <label class="campo">Comparar<select name="comp"><option value="campanha">Antes × depois do início da campanha</option><option value="anterior">Com o fechamento anterior</option></select></label>
+    <label class="campo" data-camp>Início da campanha<input type="date" name="inicio" value="${/^\d{4}-\d\d-\d\d$/.test(pref.inicio || '') ? pref.inicio : '2026-10-30'}" min="${INICIO_TIMES}"></label>
+    <button class="btn prim" type="submit">Gerar</button></div></form>
+  <div id="relTimes"><p class="carregando">Calculando…</p></div>`;
+  const f = $('#fTimes'); const ctx = { linhas: [] };
+  if (pref.comp) f.comp.value = pref.comp;
+  const sync = () => { $$('[data-outro]', f).forEach(x => { x.hidden = f.fech.value !== 'x'; }); $('[data-camp]', f).hidden = f.comp.value !== 'campanha'; };
+  f.fech.addEventListener('change', () => { if (f.fech.value === 'x' && !f.ini.value) { f.ini.value = opcoes[0].ini; f.fim.value = opcoes[0].fim; } sync(); });
+  f.comp.addEventListener('change', sync); sync();
+  const periodo = () => f.fech.value === 'x' ? { ini: f.ini.value, fim: f.fim.value, rot: `${fmtData(f.ini.value)} a ${fmtData(f.fim.value)}` } : opcoes[Number(f.fech.value)];
+  const gerar = async () => {
+    const P = periodo();
+    if (!P.ini || !P.fim || P.ini > P.fim) return toast('Período inválido.', true);
+    const n = Math.round((new Date(P.fim) - new Date(P.ini)) / 864e5) + 1;
+    // fechamento anterior: de 11 a 10 do mês antes (ou, num período livre, o mesmo número de dias logo antes)
+    const ehFech = P.ini.slice(8) === '11' && P.fim.slice(8) === '10' && n >= 28 && n <= 31;
+    const Q = f.comp.value !== 'anterior' ? null : ehFech
+      ? (() => { const [y, mm] = P.ini.split('-').map(Number); const d = new Date(Date.UTC(y, mm - 2, 11)); return { ini: d.toISOString().slice(0, 10), fim: addDiaIso(P.ini, -1) }; })()
+      : { ini: addDiaIso(P.ini, -n), fim: addDiaIso(P.ini, -1) };
+    const ini = Q ? Q.ini : P.ini;
+    try { localStorage.setItem('times_pref', JSON.stringify({ time: f.time.value, comp: f.comp.value, inicio: f.inicio.value })); } catch (_) {}
+    const box = $('#relTimes'); box.innerHTML = '<p class="carregando">Calculando…</p>';
+    const { data, error } = await sb.rpc('relatorio_times', { p_ini: ini, p_fim: P.fim });
+    if (error) { box.innerHTML = `<div class="aviso erro">${esc(msgErro(error))}</div>`; return; }
+    ctx.linhas = data || []; Object.assign(ctx, { P, Q, inicio: f.inicio.value, comp: f.comp.value });
+    const nomes = [...new Set(ctx.linhas.map(l => l.equipe))].sort((x, y) => x.localeCompare(y));
+    const atual = f.time.value || pref.time || nomes.find(x => /refis/i.test(x)) || nomes[0] || '';
+    f.time.innerHTML = nomes.length ? nomes.map(x => `<option${x === atual ? ' selected' : ''}>${esc(x)}</option>`).join('') : '<option value="">Nenhum time ainda</option>';
+    ctx.time = f.time.value;
+    desenharTimes(box, ctx);
+  };
+  f.addEventListener('submit', e => { e.preventDefault(); gerar(); });
+  f.time.addEventListener('change', () => { ctx.time = f.time.value; try { localStorage.setItem('times_pref', JSON.stringify({ time: f.time.value, comp: f.comp.value, inicio: f.inicio.value })); } catch (_) {} desenharTimes($('#relTimes'), ctx); });
+  $('#btnImpT').addEventListener('click', () => window.print());
+  $('#btnCsvT').addEventListener('click', () => csvTimes(ctx));
+  gerar();
+}
+
+function resumoTimes(ctx) {
+  const { P, Q, inicio, comp } = ctx;
+  const dentro = (d, a, b) => d >= a && d <= b;
+  // os dois lados da comparação
+  let A, B;
+  if (comp === 'anterior') { A = { rot: 'Fechamento anterior', ini: Q.ini, fim: Q.fim }; B = { rot: 'Este fechamento', ini: P.ini, fim: P.fim }; }
+  else { const c = inicio && dentro(inicio, P.ini, P.fim) ? inicio : null;
+    A = c && c > P.ini ? { rot: 'Antes da campanha', ini: P.ini, fim: addDiaIso(c, -1) } : null;
+    B = { rot: c ? 'Desde o início da campanha' : 'Período todo', ini: c || P.ini, fim: P.fim }; }
+  const lado = (S, time) => { if (!S) return null;
+    const dias = diasEntre(S.ini, S.fim), uteis = dias.filter(ehUtil).length;
+    const L = ctx.linhas.filter(l => dentro(l.dia, S.ini, S.fim) && (time == null || l.equipe === time));
+    const tot = L.reduce((s, l) => s + l.encaminhadas, 0), camp = L.reduce((s, l) => s + l.da_campanha, 0);
+    return { ...S, dias: dias.length, uteis, tot, camp, media: uteis ? tot / uteis : 0, semDados: S.fim < INICIO_TIMES || S.ini < INICIO_TIMES }; };
+  return { A, B, lado };
+}
+
+function desenharTimes(box, ctx) {
+  destruirGraficos();
+  const { P, time } = ctx;
+  if (!time) { box.innerHTML = `<div class="card"><p class="vazio">Ainda não há conversas encaminhadas a times neste período.</p><p class="dica" style="text-align:center">A contagem por time começa em 11/10/2026. Para trazer os dias anteriores à publicação, use Administração → Ligação com o CWMKT → Trazer conversas.</p></div>`; return; }
+  const R = resumoTimes(ctx), a = R.lado(R.A, time), b = R.lado(R.B, time);
+  const tot = R.lado(P, time);
+  const dec = v => v.toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+  const varPct = (x, y) => x && x.media ? ((y.media - x.media) / x.media * 100) : null;
+  const vp = varPct(a, b);
+  const fmtVar = v => v == null ? '—' : `${v > 0 ? '+' : ''}${v.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
+  const k = (rot, val, det = '', cls = '') => `<div class="kpi ${cls}"><div class="rot">${rot}</div><div class="val">${val}</div>${det ? `<div class="det">${det}</div>` : ''}</div>`;
+  const todos = [...new Set(ctx.linhas.map(l => l.equipe))];
+  const porTime = todos.map(t => ({ t, P: R.lado(P, t), A: R.lado(R.A, t), B: R.lado(R.B, t) })).sort((x, y) => y.P.tot - x.P.tot || x.t.localeCompare(y.t));
+  const totGeral = porTime.reduce((s, x) => s + x.P.tot, 0);
+  const dias = diasEntre(P.ini, P.fim);
+  const doDia = (d, t) => ctx.linhas.find(l => l.dia === d && l.equipe === t) || { encaminhadas: 0, da_campanha: 0 };
+  box.innerHTML = `
+  <h2 class="tit-rel">${esc(P.rot)} · time ${esc(time)} · ${fmtData(P.ini)} a ${fmtData(P.fim)}</h2>
+  <div class="kpis">
+    ${k('Encaminhadas ao time', NUM.format(tot.tot), `${NUM.format(tot.uteis)} dias úteis`, 'destaque')}
+    ${k('Média por dia útil', dec(tot.media))}
+    ${k('Vieram da campanha', pct(tot.camp, tot.tot), `${NUM.format(tot.camp)} pelo botão do disparo`)}
+    ${k('Parte do time no total', pct(tot.tot, totGeral), `${NUM.format(totGeral)} encaminhadas a todos os times`)}
+    ${a ? k('Variação da média', fmtVar(vp), `${a.rot.toLowerCase()} × ${b.rot.toLowerCase()}`, vp > 0 ? 'ok' : '') : ''}
+  </div>
+  ${P.ini < INICIO_TIMES || (ctx.Q && ctx.Q.ini < INICIO_TIMES) ? '<p class="dica">A contagem por time começa em 11/10/2026: dias anteriores aparecem zerados.</p>' : ''}
+  <div class="card"><h3>Comparação</h3><div class="tabela-wrap"><table>
+    <thead><tr><th>Período</th><th>Datas</th><th class="num">Dias úteis</th><th class="num">Encaminhadas</th><th class="num">Média por dia útil</th><th class="num">Da campanha</th></tr></thead>
+    <tbody>${[a, b].filter(Boolean).map(x => `<tr><td>${esc(x.rot)}</td><td>${fmtData(x.ini)} a ${fmtData(x.fim)}</td><td class="num">${NUM.format(x.uteis)}</td><td class="num">${NUM.format(x.tot)}</td><td class="num"><strong>${dec(x.media)}</strong></td><td class="num">${NUM.format(x.camp)}</td></tr>`).join('')}
+      ${a ? `<tr class="total"><td>Variação</td><td></td><td></td><td></td><td class="num">${fmtVar(vp)}</td><td></td></tr>` : ''}</tbody></table></div>
+    <p class="dica">A comparação usa a média por dia útil (segunda a sexta), porque os períodos têm tamanhos diferentes e fim de semana quase não tem atendimento. "Da campanha" = conversa encaminhada ao time no mesmo dia em que o contribuinte apertou um botão do disparo em massa.</p></div>
+  <div class="card"><h3>Por dia · ${esc(time)}</h3><div class="grafico"><canvas id="gTimes"></canvas></div></div>
+  <div class="card"><h3>Todos os times</h3><div class="tabela-wrap"><table>
+    <thead><tr><th>Time</th><th class="num">Encaminhadas</th><th class="num">% do total</th><th class="num">Média por dia útil</th>${R.A ? `<th class="num">${esc(R.A.rot)}</th><th class="num">${esc(R.B.rot)}</th><th class="num">Variação</th>` : ''}<th class="num">Da campanha</th></tr></thead>
+    <tbody>${porTime.map(x => `<tr${x.t === time ? ' class="destaque-linha"' : ''}><td>${esc(x.t)}</td><td class="num"><strong>${NUM.format(x.P.tot)}</strong></td><td class="num">${pct(x.P.tot, totGeral)}</td><td class="num">${dec(x.P.media)}</td>
+      ${R.A ? `<td class="num">${dec(x.A.media)}/dia</td><td class="num">${dec(x.B.media)}/dia</td><td class="num">${fmtVar(varPct(x.A, x.B))}</td>` : ''}<td class="num">${NUM.format(x.P.camp)}</td></tr>`).join('')}
+      <tr class="total"><td>Total</td><td class="num">${NUM.format(totGeral)}</td><td class="num">100%</td><td></td>${R.A ? '<td></td><td></td><td></td>' : ''}<td class="num">${NUM.format(porTime.reduce((s, x) => s + x.P.camp, 0))}</td></tr></tbody></table></div></div>
+  <details class="card"><summary><strong>Dia a dia · ${esc(time)}</strong></summary><div class="tabela-wrap"><table>
+    <thead><tr><th>Dia</th><th class="num">Encaminhadas</th><th class="num">Da campanha</th><th class="num">Outras</th></tr></thead>
+    <tbody>${dias.map(d => { const x = doDia(d, time); return `<tr${ehUtil(d) ? '' : ' class="dica"'}><td>${fmtData(d)} <span class="dica">${SEMANA[new Date(d + 'T12:00:00Z').getUTCDay()].replace('-feira', '')}</span></td><td class="num">${NUM.format(x.encaminhadas)}</td><td class="num">${NUM.format(x.da_campanha)}</td><td class="num">${NUM.format(x.encaminhadas - x.da_campanha)}</td></tr>`; }).join('')}</tbody></table></div></details>`;
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  Chart.defaults.color = css('--ink-2');
+  const barra = { borderRadius: 3, maxBarThickness: 26, categoryPercentage: .8, barPercentage: .9 };
+  const ini = ctx.comp === 'campanha' ? ctx.inicio : null;
+  S.charts.push(new Chart($('#gTimes'), { type: 'bar', data: { labels: dias.map(d => fmtData(d).slice(0, 5) + (d === ini ? ' ▲' : '')), datasets: [
+    { label: 'Vieram da campanha', data: dias.map(d => doDia(d, time).da_campanha), backgroundColor: css('--s1'), ...barra },
+    { label: 'Outros encaminhamentos', data: dias.map(d => { const x = doDia(d, time); return x.encaminhadas - x.da_campanha; }), backgroundColor: css('--axis'), ...barra }] },
+    options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } }, tooltip: { callbacks: { footer: it => `Total: ${NUM.format(it.reduce((s, x) => s + x.parsed.y, 0))}` } } },
+      scales: { x: { stacked: true, grid: { display: false }, border: { color: css('--axis') }, ticks: { autoSkip: true, maxRotation: 0 } },
+        y: { stacked: true, beginAtZero: true, grid: { color: css('--grid') }, border: { display: false }, ticks: { precision: 0 } } } } }));
+}
+
+function csvTimes(ctx) {
+  if (!ctx.P || !ctx.time) return toast('Gere o relatório primeiro.', true);
+  const { P, time } = ctx, R = resumoTimes(ctx);
+  const todos = [...new Set(ctx.linhas.map(l => l.equipe))].sort((x, y) => x.localeCompare(y));
+  const dec = v => v.toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+  const L = [[P.rot, `${fmtData(P.ini)} a ${fmtData(P.fim)}`, 'Time: ' + time], [],
+    ['Período', 'De', 'Até', 'Dias úteis', 'Encaminhadas', 'Média por dia útil', 'Da campanha'],
+    ...[R.lado(R.A, time), R.lado(R.B, time)].filter(Boolean).map(x => [x.rot, fmtData(x.ini), fmtData(x.fim), x.uteis, x.tot, dec(x.media), x.camp]), [],
+    ['Dia', ...todos.flatMap(t => [t, t + ' (da campanha)'])],
+    ...diasEntre(P.ini, P.fim).map(d => [fmtData(d), ...todos.flatMap(t => { const x = ctx.linhas.find(l => l.dia === d && l.equipe === t); return [x ? x.encaminhadas : 0, x ? x.da_campanha : 0]; })])];
+  const csv = '﻿' + L.map(r => r.map(c => { c = String(c ?? ''); return /[;"\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c; }).join(';')).join('\r\n');
+  const el = document.createElement('a'); el.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  el.download = `fechamento_times_${P.ini}_a_${P.fim}.csv`; el.click(); setTimeout(() => URL.revokeObjectURL(el.href), 1000);
 }
 
 // ---------- Cobrança automática → Campanhas SMS/e-mail (Assertiva) ----------

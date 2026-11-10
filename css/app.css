@@ -137,6 +137,7 @@ legend { font-weight: 700; font-size: .85rem; color: var(--primary); padding: 0 
 .kpi .val { font-size: clamp(1.15rem, 2.2vw, 1.55rem); font-weight: 700; margin-top: .15rem; }
 .kpi .det { font-size: .78rem; color: var(--muted); }
 .kpi.destaque { border-left: 4px solid var(--primary); }
+.destaque-linha td { background: var(--primary-soft); font-weight: 600; }
 .sub-rel { font-size: 1rem; margin: .6rem 0 .5rem; color: var(--ink-2); }
 .kpis.mini .kpi { padding: .5rem .7rem; } .kpis.mini .val { font-size: 1.2rem; }
 

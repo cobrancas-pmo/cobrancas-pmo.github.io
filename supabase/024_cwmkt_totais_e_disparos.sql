@@ -97,3 +97,45 @@ create policy disparos_excluir on public.disparos for delete to authenticated
 drop trigger if exists auditar on public.disparos;
 create trigger auditar after insert or update or delete on public.disparos
   for each row execute function public.registrar_auditoria();
+
+-- ---------- Times do CWMKT (10/11/2026): para qual time cada conversa foi encaminhada, por dia
+-- Fonte: anotação do CWMKT "Atribuído a <time> por …" (aviso na hora e recuperação) e mudança de time na conversa.
+-- Conta uma vez por conversa, dia e time ("encaminhado ao time"). Só o nome do time: sem texto, nome ou telefone.
+-- Base do fechamento do dia 11 (período de 11 a 10) do time "REFIS 2026" e da comparação entre períodos.
+create table if not exists public.cwmkt_times_dia (
+  conversa      bigint not null,
+  dia           date not null,
+  equipe        text not null check (char_length(equipe) <= 80),
+  encaminhada_em timestamptz not null,
+  primary key (conversa, dia, equipe)
+);
+create index if not exists cwmkt_times_dia_dia_idx on public.cwmkt_times_dia (dia, equipe);
+alter table public.cwmkt_times_dia enable row level security;
+revoke all on public.cwmkt_times_dia from anon, authenticated;
+
+create or replace function public.cwmkt_time(p_conversa bigint, p_quando timestamptz, p_time text)
+returns void language sql security definer set search_path to '' as $$
+  insert into public.cwmkt_times_dia (conversa, dia, equipe, encaminhada_em)
+  values (p_conversa, (p_quando at time zone 'America/Sao_Paulo')::date, left(trim(p_time), 80), p_quando)
+  on conflict (conversa, dia, equipe) do update set encaminhada_em = least(public.cwmkt_times_dia.encaminhada_em, excluded.encaminhada_em);
+$$;
+revoke all on function public.cwmkt_time(bigint, timestamptz, text) from public, anon, authenticated;
+grant execute on function public.cwmkt_time(bigint, timestamptz, text) to service_role;
+
+-- por dia e time: conversas encaminhadas e quantas delas vieram da campanha em massa no mesmo dia
+create or replace function public.relatorio_times(p_ini date, p_fim date)
+returns table (dia date, equipe text, encaminhadas integer, da_campanha integer)
+language plpgsql stable security definer set search_path to '' as $$
+begin
+  if not privado.sou_ativo() then raise exception 'Acesso negado'; end if;
+  return query
+    select t.dia, t.equipe, count(*)::int,
+           count(*) filter (where exists (select 1 from public.atendimentos_wa a
+                                           where a.conversa = t.conversa and a.dia = t.dia
+                                             and a.gatilho in (select f.gatilho from public.atendimento_frases f where f.quem = 'contribuinte')))::int
+      from public.cwmkt_times_dia t
+     where t.dia between p_ini and p_fim
+     group by t.dia, t.equipe order by t.dia, t.equipe;
+end $$;
+revoke all on function public.relatorio_times(date, date) from public, anon;
+grant execute on function public.relatorio_times(date, date) to authenticated;
