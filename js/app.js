@@ -1375,8 +1375,12 @@ function resumoAtWa(ctx, ini, fim, ag) {
       cwmkt: Number(c.atendimentos) || 0, recebidas: Number(c.recebidas) || 0 };
   });
   const tot = k => dias.reduce((s, d) => s + d[k], 0);
+  // comparação com todo o CWMKT: só nos dias que têm contagem do CWMKT (ela começou depois da campanha),
+  // senão a campanha de dias sem contagem entra contra um total que não existe (ex.: 1.066%)
+  const comCw = dias.filter(d => d.cwmkt > 0);
   return { L, cats, dias, enviadas: tot('enviadas'), massa: L.filter(l => l.cat === CAT_MASSA).length,
-    cwmkt: tot('cwmkt'), recebidas: tot('recebidas'), temCwmkt: ctx.cwmkt.length > 0 };
+    cwmkt: tot('cwmkt'), recebidas: tot('recebidas'), temCwmkt: comCw.length > 0,
+    massaCw: comCw.reduce((s, d) => s + d.massa, 0), diasCw: comCw.length, iniCw: comCw[0]?.dia, todosCw: comCw.length === dias.filter(d => d.massa || d.outrasCat || d.cwmkt).length };
 }
 
 function desenharAtendimentosWa(box, ctx, ini, fim, ag, recarregar) {
@@ -1407,10 +1411,11 @@ function desenharAtendimentosWa(box, ctx, ini, fim, ag, recarregar) {
   <h3 class="sub-rel">Comparação com todo o CWMKT</h3>
   <div class="kpis">
     ${k('Atendimentos no CWMKT', R.temCwmkt ? NUM.format(R.cwmkt) : '—', 'conversas com contribuinte, 1 por dia')}
-    ${k('Vieram da campanha', R.temCwmkt ? pct(R.massa, R.cwmkt) : '—', R.temCwmkt ? `${NUM.format(R.massa)} de ${NUM.format(R.cwmkt)}` : '')}
+    ${k('Vieram da campanha', R.temCwmkt ? pct(R.massaCw, R.cwmkt) : '—', R.temCwmkt ? `${NUM.format(R.massaCw)} de ${NUM.format(R.cwmkt)}` : '')}
     ${k('Mensagens recebidas', R.temCwmkt ? NUM.format(R.recebidas) : '—', 'dos contribuintes, campanha ou não')}
   </div>
-  ${R.temCwmkt ? '' : '<p class="dica">Ainda não há contagem do CWMKT para este período. Ela começa a valer a partir de 09/11/2026; para dias anteriores, use Administração → Ligação com o CWMKT → Trazer conversas.</p>'}
+  ${!R.temCwmkt ? '<p class="dica">Ainda não há contagem do CWMKT para este período. Para dias anteriores à publicação, use Administração → Ligação com o CWMKT → Trazer conversas.</p>'
+    : R.todosCw ? '' : `<p class="dica">A contagem de todo o CWMKT só existe em ${NUM.format(R.diasCw)} dia(s) deste período (desde ${fmtData(R.iniCw)}); a comparação usa só esses dias. Para completar, use Administração → Ligação com o CWMKT → Trazer conversas.</p>`}
   ${ag ? '<p class="dica">Mensagens enviadas, taxa de resposta e totais do CWMKT são da equipe toda; o filtro de atendente vale para os atendimentos de campanha.</p>' : ''}
   <div class="grade-2">
     <div class="card"><h3>Por dia</h3><div class="grafico"><canvas id="gWaDia"></canvas></div></div>
@@ -1421,7 +1426,7 @@ function desenharAtendimentosWa(box, ctx, ini, fim, ag, recarregar) {
     <tbody>${R.dias.filter(d => d.enviadas || d.massa || d.outrasCat || d.cwmkt).map(d => { const Ld = L.filter(l => l.dia === d.dia);
       return `<tr><td>${fmtData(d.dia)}</td><td class="num">${d.enviadas ? NUM.format(d.enviadas) : '—'}</td><td class="num"><strong>${NUM.format(d.massa)}</strong></td><td class="num">${pct(d.massa, d.enviadas)}</td>
         ${outrosCats.map(c => `<td class="num">${NUM.format(conta(Ld, c))}</td>`).join('')}<td class="num">${d.cwmkt ? NUM.format(d.cwmkt) : '—'}</td><td class="num">${pct(d.massa, d.cwmkt)}</td><td class="num">${d.recebidas ? NUM.format(d.recebidas) : '—'}</td></tr>`; }).join('') || `<tr><td colspan="${7 + outrosCats.length}" class="vazio">Nada neste período.</td></tr>`}
-      <tr class="total"><td>Total</td><td class="num">${R.enviadas ? NUM.format(R.enviadas) : '—'}</td><td class="num">${NUM.format(R.massa)}</td><td class="num">${pct(R.massa, R.enviadas)}</td>${outrosCats.map(c => `<td class="num">${NUM.format(conta(L, c))}</td>`).join('')}<td class="num">${R.temCwmkt ? NUM.format(R.cwmkt) : '—'}</td><td class="num">${pct(R.massa, R.cwmkt)}</td><td class="num">${R.temCwmkt ? NUM.format(R.recebidas) : '—'}</td></tr></tbody></table></div>
+      <tr class="total"><td>Total</td><td class="num">${R.enviadas ? NUM.format(R.enviadas) : '—'}</td><td class="num">${NUM.format(R.massa)}</td><td class="num">${pct(R.massa, R.enviadas)}</td>${outrosCats.map(c => `<td class="num">${NUM.format(conta(L, c))}</td>`).join('')}<td class="num">${R.temCwmkt ? NUM.format(R.cwmkt) : '—'}</td><td class="num">${pct(R.massaCw, R.cwmkt)}</td><td class="num">${R.temCwmkt ? NUM.format(R.recebidas) : '—'}</td></tr></tbody></table></div>
     <p class="dica">A taxa de resposta compara, em cada dia, quem apertou o botão com as mensagens enviadas informadas para aquele dia. Respostas que chegam no dia seguinte ao disparo contam no dia em que chegaram.</p></div>
   <div class="card"><h3>Por atendente <span class="dica">(1º atribuído)</span></h3><div class="tabela-wrap"><table>
     <thead><tr><th>Atendente</th>${R.cats.map(c => `<th class="num">${esc(c)}</th>`).join('')}<th class="num">Total</th><th class="num">Até atender</th><th></th></tr></thead>
@@ -1496,7 +1501,7 @@ function csvAtendimentosWa(ctx, ini, fim, ag) {
   const L = [['Cobrança automática no WhatsApp', `${fmtData(ini)} a ${fmtData(fim)}`, ag ? 'Atendente: ' + ag : 'Todos os atendentes'], [],
     ['Dia', 'Mensagens enviadas', CAT_MASSA, 'Taxa de resposta', ...outrosCats, 'Atendimentos no CWMKT', 'Da campanha', 'Mensagens recebidas'],
     ...R.dias.map(d => { const Ld = R.L.filter(l => l.dia === d.dia); return [fmtData(d.dia), d.enviadas || '', d.massa, pct(d.massa, d.enviadas), ...outrosCats.map(c => Ld.filter(l => l.cat === c).length), d.cwmkt || '', pct(d.massa, d.cwmkt), d.recebidas || '']; }),
-    ['Total', R.enviadas || '', R.massa, pct(R.massa, R.enviadas), ...outrosCats.map(c => R.L.filter(l => l.cat === c).length), R.cwmkt || '', pct(R.massa, R.cwmkt), R.recebidas || ''], [],
+    ['Total', R.enviadas || '', R.massa, pct(R.massa, R.enviadas), ...outrosCats.map(c => R.L.filter(l => l.cat === c).length), R.cwmkt || '', pct(R.massaCw, R.cwmkt), R.recebidas || ''], [],
     ['Começou', 'Como começou', 'Botão/frase', 'Atendente', 'Atribuída em', 'Minutos até atender', 'Conversa no CWMKT'],
     ...R.L.map(l => [new Date(l.iniciada_em).toLocaleString('pt-BR'), l.cat, l.gatilho, String(l.agente_nome || '').trim() ? nomeAtWa(l) : 'Sem atendente',
       l.atribuido_em ? new Date(l.atribuido_em).toLocaleString('pt-BR') : '', l.espera == null ? '' : Math.round(l.espera), l.link || '#' + l.conversa])];
